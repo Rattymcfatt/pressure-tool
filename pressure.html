@@ -1,0 +1,1733 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Kart Tyre Pressure Coach</title>
+
+<!-- iOS “app-like” (single-file friendly) -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Pressure Coach">
+<meta name="mobile-web-app-capable" content="yes">
+
+<!-- lightweight inline icon -->
+<link rel="icon" href='data:image/svg+xml;utf8,
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<rect width="100" height="100" rx="18" fill="%230b0b0d"/>
+<text x="50" y="62" font-size="54" text-anchor="middle">🏁</text>
+</svg>'>
+
+<meta name="theme-color" content="#0b0b0d"/>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+<style>
+  :root{
+    --bg:#0b0b0d; --card:#141419; --line:#23232a; --muted:#9aa0a6; --txt:#f2f2f3;
+    --acc:#4ade80; --warn:#fbbf24; --bad:#fb7185; --ok:#60a5fa;
+  }
+  *{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial}
+  body{margin:0;background:var(--bg);color:var(--txt)}
+  header{position:sticky;top:0;z-index:10;background:rgba(11,11,13,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:12px 14px}
+  h1{margin:0;font-size:16px}
+  .sub{margin-top:4px;color:var(--muted);font-size:12px;line-height:1.35}
+  main{max-width:900px;margin:0 auto;padding:12px 14px 110px;display:grid;gap:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 6px}
+  input,select,button{width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);background:#0f0f14;color:var(--txt);font-size:15px}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  button{background:var(--acc);border:none;color:#08110c;font-weight:950;cursor:pointer}
+  button.secondary{background:transparent;border:1px solid var(--line);color:var(--txt);font-weight:850}
+  button.danger{background:transparent;border:1px solid var(--bad);color:var(--bad);font-weight:950}
+  .muted{color:var(--muted);font-size:13px}
+  .big{font-size:22px;font-weight:950}
+  .pill{display:inline-block;padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--muted);font-size:12px;margin-right:6px;margin-bottom:6px}
+  .pill.ok{border-color:rgba(96,165,250,.45);color:var(--ok)}
+  .pill.warn{border-color:rgba(251,191,36,.45);color:var(--warn)}
+  .pill.bad{border-color:rgba(251,113,133,.45);color:var(--bad)}
+  .hint{color:var(--muted);font-size:12px;margin-top:6px;line-height:1.35}
+  .locked .lockable{opacity:0.35;pointer-events:none;filter:grayscale(0.2)}
+  #authGate{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(11,11,13,.92);z-index:20;padding:16px}
+  .locked #authGate{display:flex}
+  #authGate .card{max-width:420px;width:100%}
+  #syncStatus.flash,#syncStatusInline.flash{color:var(--acc);font-weight:850}
+  pre{white-space:pre-wrap;margin:8px 0 0;color:#cdd0d5}
+  footerbar{position:fixed;left:0;right:0;bottom:0;z-index:10;border-top:1px solid var(--line);background:rgba(11,11,13,.92);backdrop-filter:blur(10px);padding:12px 14px}
+  .meterWrap{display:grid;gap:8px}
+  .bar{height:12px;border-radius:999px;background:#0f0f14;border:1px solid var(--line);overflow:hidden}
+  .bar > div{height:100%;width:0%}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Tyre Pressure Coach — Setup + Confidence + Auto AI Double-Check</h1>
+  <div class="sub">
+    Measured gain (hot−cold) wins. Setup nudges are small. Dunlop DHH tuned defaults for <b>Canberra</b> (and learning will take over).
+  </div>
+</header>
+
+<div id="authGate">
+  <div class="card">
+    <h3 style="margin:0 0 8px">Sign up to continue</h3>
+    <div class="row">
+      <div>
+        <label>Email</label>
+        <input id="syncEmail" type="email" placeholder="you@example.com">
+      </div>
+      <div>
+        <label>Password</label>
+        <input id="syncPassword" type="password" placeholder="at least 6 chars">
+      </div>
+    </div>
+
+    <!-- NOTE: forced-login mode: no "remember me" (always login each time) -->
+
+    <div class="row" style="margin-top:10px">
+      <button class="secondary" id="syncSignUpBtn" type="button">Sign up</button>
+      <button class="secondary" id="syncSignInBtn" type="button">Sign in</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="secondary" id="syncGoogleBtn" type="button">Sign in with Google</button>
+      <button class="secondary" id="syncAppleBtn" type="button">Sign in with Apple</button>
+    </div>
+    <div class="hint" id="syncStatus">Login required.</div>
+  </div>
+</div>
+
+<main>
+  <!-- CORE -->
+  <section class="card lockable">
+    <div class="row">
+      <div>
+        <label>Tyre</label>
+        <select id="tyre">
+          <option value="DUNLOP_DHH" selected>Dunlop DHH</option>
+          <option value="LECONT_LPM">LeCont LPM</option>
+          <option value="LECONT_LOH">LeCont LOH</option>
+        </select>
+      </div>
+      <div>
+        <label>Track (VIC / NSW / ACT)</label>
+        <select id="track"></select>
+      </div>
+    </div>
+
+    <div class="row">
+      <div><label>Target Hot Front (psi)</label><input id="targetHotF" type="number" step="0.1"></div>
+      <div><label>Target Hot Rear (psi)</label><input id="targetHotR" type="number" step="0.1"></div>
+    </div>
+
+    <div class="row3">
+      <div><label>Ambient (°C)</label><input id="ambientTemp" type="number" step="0.5" placeholder="optional"></div>
+      <div><label>Humidity (%)</label><input id="humidity" type="number" step="1" min="0" max="100" placeholder="optional"></div>
+      <div>
+        <label>Weather</label>
+        <button class="secondary" id="weatherBtn" type="button">Use GPS weather</button>
+        <div class="hint" id="weatherStatus">Not fetched</div>
+      </div>
+    </div>
+
+    <div class="row3">
+      <div>
+        <label>Grip</label>
+        <select id="grip">
+          <option value="LOW">Low / Green</option>
+          <option value="NORMAL" selected>Normal</option>
+          <option value="HIGH">High / Rubbered</option>
+        </select>
+      </div>
+      <div>
+        <label>Track Condition</label>
+        <select id="conditions">
+          <option value="NORMAL" selected>Normal</option>
+          <option value="GREEN">Green / Low rubber</option>
+          <option value="RUBBERED">Rubbered / High rubber</option>
+          <option value="DUSTY">Dusty</option>
+          <option value="DAMP">Damp</option>
+        </select>
+      </div>
+      <div>
+        <label>Session Length (min)</label>
+        <input id="sessionLen" type="number" step="0.5" placeholder="e.g. 8">
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Heat Cycles (tyre age)</label>
+        <input id="heatCycles" type="number" step="1" min="0" placeholder="e.g. 5">
+      </div>
+      <div>
+        <label>Laps (total on set)</label>
+        <input id="totalLaps" type="number" step="1" min="0" placeholder="e.g. 120">
+      </div>
+    </div>
+  </section>
+
+  <!-- PRESSURES -->
+  <section class="card lockable">
+    <h3 style="margin:0 0 8px">Pressures (this run)</h3>
+    <div class="row">
+      <div><label>Cold Front</label><input id="coldF" type="number" step="0.1" placeholder="e.g. 9.0"></div>
+      <div><label>Cold Rear</label><input id="coldR" type="number" step="0.1" placeholder="e.g. 9.0"></div>
+    </div>
+    <div class="row">
+      <div><label>Hot Front</label><input id="hotF" type="number" step="0.1" placeholder="e.g. 14.0"></div>
+      <div><label>Hot Rear</label><input id="hotR" type="number" step="0.1" placeholder="e.g. 13.8"></div>
+    </div>
+    <div class="row">
+      <div><label>Offset Front Left (psi)</label><input id="offsetFL" type="number" step="0.1" placeholder="e.g. -0.1"></div>
+      <div><label>Offset Front Right (psi)</label><input id="offsetFR" type="number" step="0.1" placeholder="e.g. +0.1"></div>
+    </div>
+    <div class="row">
+      <div><label>Offset Rear Left (psi)</label><input id="offsetRL" type="number" step="0.1" placeholder="e.g. -0.1"></div>
+      <div><label>Offset Rear Right (psi)</label><input id="offsetRR" type="number" step="0.1" placeholder="e.g. +0.1"></div>
+    </div>
+    <div class="hint">Best accuracy comes from entering both cold + hot (same gauge). If hot is blank, it uses learned gain or baseline.</div>
+  </section>
+
+  <!-- SETUP -->
+  <section class="card lockable">
+    <h3 style="margin:0 0 8px">Setup (kept for accuracy)</h3>
+
+    <div class="row3">
+      <div>
+        <label>Chassis</label>
+        <select id="chassisFamily">
+          <option value="OTK" selected>OTK</option>
+          <option value="KART_REPUBLIC">Kart Republic</option>
+          <option value="ARROW">Arrow</option>
+          <option value="OTHER">Other</option>
+        </select>
+      </div>
+      <div>
+        <label>Driver Style</label>
+        <select id="driverStyle">
+          <option value="SMOOTH">Smooth</option>
+          <option value="NEUTRAL" selected>Neutral</option>
+          <option value="AGGRESSIVE">Aggressive</option>
+        </select>
+      </div>
+      <div>
+        <label>Front Bar</label>
+        <select id="frontBar">
+          <option value="NONE" selected>None</option>
+          <option value="SOFT">Soft</option>
+          <option value="MEDIUM">Medium</option>
+          <option value="HARD">Hard</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row3">
+      <div>
+        <label>Axle Brand</label>
+        <select id="axleBrand">
+          <option value="OTK" selected>OTK</option>
+          <option value="KART_REPUBLIC">Kart Republic</option>
+          <option value="ARROW">Arrow</option>
+          <option value="OTHER">Other</option>
+        </select>
+      </div>
+      <div>
+        <label>Axle Stiffness</label>
+        <select id="axleStiffness"></select>
+      </div>
+      <div>
+        <label>Axle Size</label>
+        <select id="axleSize">
+          <option value="1000">1000</option>
+          <option value="1015" selected>1015</option>
+          <option value="1030">1030</option>
+          <option value="UNKNOWN">Unknown</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row3">
+      <div>
+        <label>Rim Type</label>
+        <select id="rimType">
+          <option value="MAG" selected>Mag</option>
+          <option value="OXITECH_AMV9F">Oxitech AMV 9F</option>
+          <option value="ALLOY">Alloy</option>
+          <option value="STEEL">Steel</option>
+          <option value="UNKNOWN">Unknown</option>
+        </select>
+      </div>
+      <div>
+        <label>Engine</label>
+        <select id="engineSetup">
+          <option value="TIRED">Tired</option>
+          <option value="BASELINE" selected>Baseline</option>
+          <option value="STRONG">Strong</option>
+        </select>
+      </div>
+      <div>
+        <label>Front End Feel</label>
+        <select id="frontEnd">
+          <option value="CALM">Calm</option>
+          <option value="NEUTRAL" selected>Neutral</option>
+          <option value="AGGRESSIVE">Aggressive</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Seat Brand</label>
+        <select id="seatBrand">
+          <option value="JECKO" selected>JECKO (common on KR / Arrow)</option>
+          <option value="TILLETT">Tillett</option>
+          <option value="FREELINE">Freeline</option>
+          <option value="OTK">OTK / Fiberglass baseline</option>
+          <option value="OTHER">Other</option>
+        </select>
+      </div>
+      <div>
+        <label>Seat Stiffness / Model</label>
+        <select id="seatStiffness"></select>
+        <div class="hint" id="seatHint"></div>
+      </div>
+    </div>
+
+    <details style="margin-top:10px">
+      <summary class="muted">Optional custom notes (affects learning key)</summary>
+      <label>Custom tags (comma separated)</label>
+      <input id="customTags" placeholder='e.g. hubs=short, wind=head' />
+      <div class="hint">Optional: helps learning split when you do something unusual.</div>
+    </details>
+  </section>
+
+  <!-- CONFIDENCE METER -->
+  <section class="card lockable">
+    <h3 style="margin:0 0 8px">Confidence</h3>
+    <div class="meterWrap">
+      <div class="bar"><div id="confBar"></div></div>
+      <div class="row">
+        <div>
+          <div class="muted">Score</div>
+          <div class="big" id="confScore">—</div>
+        </div>
+        <div>
+          <div class="muted">Why</div>
+          <div class="muted" id="confWhy">Tap Analyze.</div>
+        </div>
+      </div>
+      <div class="hint">High confidence = you entered hot pressures + app has learned this tyre+track+setup. Low confidence = it’s guessing (baseline).</div>
+    </div>
+  </section>
+
+  <!-- AI -->
+  <section class="card lockable">
+    <h3 style="margin:0 0 8px">AI Double-Check (Groq)</h3>
+    <div class="row">
+      <div>
+        <label>Groq API Key (saved on this device)</label>
+        <input id="groqKey" type="password" placeholder="gsk_...">
+      </div>
+      <div>
+        <label>Model</label>
+        <select id="groqModel">
+          <option value="llama-3.1-8b-instant" selected>llama-3.1-8b-instant</option>
+          <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="secondary" id="saveAiBtn" type="button">Save</button>
+      <button class="secondary" id="toggleAiBtn" type="button">AI: OFF</button>
+    </div>
+    <div class="hint" id="aiStatus">When AI is ON, it runs automatically after Analyze.</div>
+  </section>
+
+  <section class="card">
+    <h3 style="margin:0 0 8px">Cloud Sync (Supabase)</h3>
+    <div class="hint" id="syncStatusInline">Login required.</div>
+    <div class="row" style="margin-top:10px">
+      <button class="secondary" id="syncSignOutBtn" type="button">Sign out</button>
+      <button class="secondary" id="syncNowBtn" type="button">Sync now</button>
+    </div>
+  </section>
+
+  <!-- RESULTS -->
+  <section class="card lockable">
+    <h3 style="margin:0 0 8px">Result (App)</h3>
+    <div id="out" class="muted">Tap Analyze.</div>
+    <div class="row" style="margin-top:10px">
+      <button class="secondary" id="copyBtn" type="button">Copy summary</button>
+      <button class="danger" id="resetBtn" type="button">Reset learning</button>
+    </div>
+    <div class="hint" id="learnHint"></div>
+  </section>
+
+  <section class="card lockable">
+    <h3 style="margin:0 0 8px">Result (AI double-check)</h3>
+    <div id="aiOut" class="muted">AI is off, or no analysis yet.</div>
+  </section>
+
+  <details class="card lockable">
+    <summary class="muted">Session Log (last 40)</summary>
+    <pre id="logView"></pre>
+  </details>
+
+  <details class="card lockable">
+    <summary class="muted">Debug (last analysis JSON)</summary>
+    <pre id="debug"></pre>
+  </details>
+</main>
+
+<footerbar class="lockable">
+  <div class="row">
+    <button id="analyzeBtn" type="button">Analyze (auto AI check)</button>
+    <button class="secondary" id="clearAiBtn" type="button">Clear AI</button>
+  </div>
+</footerbar>
+
+<script>
+/* =========================
+   TRACKS
+========================= */
+const TRACKS = {
+  VIC: [
+    ["VIC_GKCV_TODD_ROAD","Todd Road (GKCV) – Port Melbourne"],
+    ["VIC_OAKLEIGH","Oakleigh – Clayton South"],
+    ["VIC_EASTERN_LIONS","Eastern Lions – Lilydale"],
+    ["VIC_GIPPSLAND","Gippsland – Morwell"],
+    ["VIC_BALLARAT","Ballarat"],
+    ["VIC_BENDIGO","Bendigo"],
+    ["VIC_GOULBURN_VALLEY","Goulburn Valley – Numurkah"]
+  ],
+  NSW: [
+    ["NSW_SIKC_EASTERN_CREEK","Eastern Creek (SIKC)"],
+    ["NSW_CDKC_LITHGOW","Lithgow / Marrangaroo (CDKC)"],
+    ["NSW_GREATER_SYDNEY_WILBERFORCE","Wilberforce (Greater Sydney / Indy 800)"],
+    ["NSW_NEWCASTLE_CAMERON_PARK","Newcastle – Cameron Park"],
+    ["NSW_DUBBO","Dubbo"],
+    ["NSW_BATHURST","Bathurst"]
+  ],
+  ACT: [
+    ["ACT_CANBERRA_MARK_WEBBER","Canberra – Circuit Mark Webber"]
+  ]
+};
+
+/* =========================
+   TYRES (tuned baseline)
+========================= */
+const TYRES = {
+  LECONT_LPM: { name:"LeCont LPM", maxHot:12.5, defaultTF:12.4, defaultTR:12.2, baselineGainF:4.6, baselineGainR:4.6, bounds:{min:5.5,max:10.5} },
+  LECONT_LOH: { name:"LeCont LOH", maxHot:12.5, defaultTF:12.4, defaultTR:12.2, baselineGainF:4.4, baselineGainR:4.4, bounds:{min:5.5,max:10.5} },
+  DUNLOP_DHH: { name:"Dunlop DHH", maxHot:14.0, defaultTF:14.0, defaultTR:13.8, baselineGainF:3.6, baselineGainR:3.6, bounds:{min:7.0,max:12.5} }
+};
+
+// Track-specific baseline gain nudges (ONLY used when not measured and not learned)
+const TRACK_BASELINE_NUDGE = {
+  "ACT_CANBERRA_MARK_WEBBER": { DUNLOP_DHH: { dF:+0.2, dR:+0.2 } }
+};
+
+const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+/* =========================
+   STORAGE
+========================= */
+const KEY = "kart_pressure_setup_conf_ai_v2";
+const state = (()=>{ try{return JSON.parse(localStorage.getItem(KEY)||"{}")}catch{return{}} })();
+state.learn ||= {};
+state.last ||= null;
+state.ai ||= { enabled:false, key:"", model:"llama-3.1-8b-instant" };
+state.log ||= [];
+state.rimLearn ||= {};
+state.offsets ||= { fl:0, fr:0, rl:0, rr:0 };
+
+// FORCED LOGIN: no remember-me / no stored password
+state.sync ||= { enabled:true, remember:false, email:"", password:"", lastPull:null, lastPush:null };
+
+state.lastUpdated ||= null;
+
+const SUPABASE_URL = "https://scvyhioronefrknfbrno.supabase.co";
+const SUPABASE_KEY = "sb_publishable_JgaZfdhpvqDxsn_CrTGDDw_y0VBeezr";
+const SUPABASE_TABLE = "pressure_state";
+let supabase = null;
+let syncTimer = null;
+let syncPushTimer = null;
+let suppressSync = false;
+let currentUser = null;
+let autoSignInAttempted = false;
+let syncStatusTimer = null;
+
+function save(opts){
+  const o = opts || {};
+  if (!o.skipTimestamp) state.lastUpdated = nowISO();
+  localStorage.setItem(KEY, JSON.stringify(state));
+  if (!o.skipSync && syncEnabled() && !suppressSync){
+    queueSyncPush();
+  }
+}
+function pushLog(entry){
+  state.log.unshift(entry);
+  state.log = state.log.slice(0, 40);
+  save();
+}
+function updateRimLearn(rimType, deltaF, deltaR){
+  if (!rimType || rimType === "UNKNOWN") return null;
+  state.rimLearn[rimType] ||= { avgAdjF:null, avgAdjR:null, n:0 };
+  const L = state.rimLearn[rimType];
+  const alpha = 0.25;
+  const cap = (x)=>clamp(x, -0.6, 0.6);
+  L.avgAdjF = (L.avgAdjF==null) ? cap(deltaF) : cap((1-alpha)*L.avgAdjF + alpha*deltaF);
+  L.avgAdjR = (L.avgAdjR==null) ? cap(deltaR) : cap((1-alpha)*L.avgAdjR + alpha*deltaR);
+  L.n = (L.n||0) + 1;
+  save();
+  return L;
+}
+
+/* =========================
+   UTILS
+========================= */
+const el = (id)=>document.getElementById(id);
+const clamp = (x,a,b)=>Math.max(a,Math.min(b,x));
+const r1 = (x)=>Math.round(x*10)/10;
+const num = (v)=>{ const n=Number(v); return Number.isFinite(n)?n:null; };
+const nowISO = ()=> new Date().toISOString();
+const esc = (s)=>String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+function plausibleGain(g){ return Number.isFinite(g) && g>=2.0 && g<=6.5; }
+
+/* =========================
+   CLOUD SYNC (SUPABASE)
+========================= */
+function syncEnabled(){ return !!state.sync?.enabled && !!currentUser; }
+function setSyncStatus(msg){
+  const s = el("syncStatus");
+  const sInline = el("syncStatusInline");
+  if (s) s.textContent = msg;
+  if (sInline) sInline.textContent = msg;
+}
+function flashSyncStatus(msg){
+  const s = el("syncStatus");
+  const sInline = el("syncStatusInline");
+  const nodes = [s, sInline].filter(Boolean);
+  if (!nodes.length) return;
+  if (syncStatusTimer) clearTimeout(syncStatusTimer);
+  for (const n of nodes){
+    n.classList.add("flash");
+    n.textContent = msg;
+  }
+  syncStatusTimer = setTimeout(()=>{
+    for (const n of nodes){
+      n.classList.remove("flash");
+    }
+    refreshSyncUI();
+  }, 2000);
+}
+
+/* =========================
+   SUPABASE INIT (FORCED LOGIN MODE)
+   - persistSession: false  ✅ (Option A)
+   - also clear any existing session on load for certainty
+========================= */
+function initSupabase(){
+  if (supabase) return;
+  if (!window.supabase){
+    setSyncStatus("Supabase SDK missing.");
+    return;
+  }
+  supabase = window.supabase.createClient(
+    SUPABASE_URL,
+    SUPABASE_KEY,
+    {
+      auth: {
+        persistSession: false,     // ✅ FORCE LOGIN EVERY TIME
+        autoRefreshToken: false,
+        detectSessionInUrl: true
+      }
+    }
+  );
+}
+
+function refreshSyncUI(){
+  const signOutBtn = el("syncSignOutBtn");
+  const syncBtn = el("syncNowBtn");
+  if (!currentUser){
+    if (signOutBtn) signOutBtn.disabled = true;
+    if (syncBtn) syncBtn.disabled = true;
+    setSyncStatus("Login required.");
+    return;
+  }
+  if (signOutBtn) signOutBtn.disabled = false;
+  if (syncBtn) syncBtn.disabled = false;
+  setSyncStatus("Logged in: " + (currentUser.email || currentUser.id));
+}
+function setAppLocked(locked){
+  document.body.classList.toggle("locked", locked);
+  const analyzeBtn = el("analyzeBtn");
+  const clearAiBtn = el("clearAiBtn");
+  if (analyzeBtn) analyzeBtn.disabled = locked;
+  if (clearAiBtn) clearAiBtn.disabled = locked;
+}
+
+// FORCED LOGIN: no remember-me logic (kept as stubs to avoid refactors)
+function updateRememberedCreds(_email, _password){
+  state.sync.remember = false;
+  state.sync.email = "";
+  state.sync.password = "";
+  save({ skipTimestamp:true, skipSync:true });
+}
+
+function buildSyncPayload(){
+  const payload = JSON.parse(JSON.stringify(state));
+  delete payload.sync;
+  return payload;
+}
+async function syncPull(){
+  if (!syncEnabled()) return;
+  initSupabase();
+  if (!supabase) return;
+  const userId = currentUser.id;
+  const { data, error } = await supabase
+    .from(SUPABASE_TABLE)
+    .select("payload, updated_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error){
+    setSyncStatus("Sync pull error.");
+    return;
+  }
+  if (!data || !data.payload){
+    setSyncStatus("No remote data.");
+    return;
+  }
+  const remote = data.payload;
+  const remoteUpdated = remote.lastUpdated || data.updated_at;
+  const localUpdated = state.lastUpdated;
+  if (!remoteUpdated || (localUpdated && new Date(remoteUpdated) <= new Date(localUpdated))){
+    state.sync.lastPull = nowISO();
+    save({ skipTimestamp:true, skipSync:true });
+    return;
+  }
+  const localSync = state.sync;
+  suppressSync = true;
+  Object.assign(state, remote);
+  state.sync = localSync;
+  state.sync.lastPull = nowISO();
+  save({ skipTimestamp:true, skipSync:true });
+  suppressSync = false;
+  setSyncStatus("Pulled from cloud.");
+}
+async function syncPush(){
+  if (!syncEnabled()) return;
+  initSupabase();
+  if (!supabase) return;
+  const userId = currentUser.id;
+  const payload = buildSyncPayload();
+  const updatedAt = payload.lastUpdated || nowISO();
+  const { error } = await supabase
+    .from(SUPABASE_TABLE)
+    .upsert({ user_id: userId, payload, updated_at: updatedAt }, { onConflict:"user_id" });
+  if (error){
+    setSyncStatus("Sync push error.");
+    return;
+  }
+  state.sync.lastPush = nowISO();
+  save({ skipTimestamp:true, skipSync:true });
+  setSyncStatus("Synced.");
+}
+function queueSyncPush(){
+  if (syncPushTimer) clearTimeout(syncPushTimer);
+  syncPushTimer = setTimeout(()=>{ syncPush(); }, 1200);
+}
+async function syncNow(opts){
+  const o = opts || {};
+  const notify = !!o.notify;
+  if (!syncEnabled()) return;
+  setSyncStatus("Syncing...");
+  await syncPull();
+  await syncPush();
+  if (notify){
+    const keep = confirm("Sync complete. Keep background sync on?");
+    if (!keep){
+      state.sync.enabled = false;
+      save({ skipTimestamp:true, skipSync:true });
+      stopSyncPolling();
+      refreshSyncUI();
+    }
+  }
+}
+function startSyncPolling(){
+  if (syncTimer) clearInterval(syncTimer);
+  syncTimer = setInterval(()=>{ syncPull(); }, 60000);
+}
+function stopSyncPolling(){
+  if (syncTimer){ clearInterval(syncTimer); syncTimer = null; }
+}
+async function handleSignUp(){
+  initSupabase();
+  if (!supabase) return;
+  const email = (el("syncEmail")?.value || "").trim();
+  const password = (el("syncPassword")?.value || "").trim();
+  if (!email || !password){
+    setSyncStatus("Email and password required.");
+    return;
+  }
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error){
+    setSyncStatus("Sign up error.");
+    return;
+  }
+  updateRememberedCreds(email, password);
+  if (data?.session){
+    flashSyncStatus("Signed up and logged in.");
+  } else {
+    flashSyncStatus("Check email to confirm sign up.");
+  }
+}
+async function handleSignIn(){
+  initSupabase();
+  if (!supabase) return;
+  const email = (el("syncEmail")?.value || "").trim();
+  const password = (el("syncPassword")?.value || "").trim();
+  if (!email || !password){
+    setSyncStatus("Email and password required.");
+    return;
+  }
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error){
+    setSyncStatus("Sign in error.");
+    return;
+  }
+  updateRememberedCreds(email, password);
+  flashSyncStatus("Signed in.");
+}
+async function handleSignOut(){
+  initSupabase();
+  if (!supabase) return;
+  await supabase.auth.signOut();
+  currentUser = null;
+  state.sync.remember = false;
+  state.sync.password = "";
+  save({ skipTimestamp:true, skipSync:true });
+  stopSyncPolling();
+  flashSyncStatus("Signed out.");
+}
+async function handleOAuth(provider){
+  initSupabase();
+  if (!supabase) return;
+  const redirectTo = window.location.origin + window.location.pathname;
+  setSyncStatus("Opening " + provider + " login...");
+  await supabase.auth.signInWithOAuth({ provider, options:{ redirectTo } });
+}
+async function loadCurrentUser(){
+  initSupabase();
+  if (!supabase) return;
+  const { data } = await supabase.auth.getUser();
+  currentUser = data?.user || null;
+}
+
+// FORCED LOGIN: do not auto-sign-in
+async function tryAutoSignIn(){
+  if (autoSignInAttempted) return;
+  autoSignInAttempted = true;
+  return;
+}
+
+function setupAuthListener(){
+  initSupabase();
+  if (!supabase) return;
+  supabase.auth.onAuthStateChange((_event, session)=>{
+    currentUser = session?.user || null;
+    if (currentUser){
+      state.sync.enabled = true;
+      save({ skipTimestamp:true, skipSync:true });
+      flashSyncStatus("Signed in as " + (currentUser.email || currentUser.id));
+      syncNow();
+      startSyncPolling();
+    } else {
+      stopSyncPolling();
+      refreshSyncUI();
+    }
+    setAppLocked(!currentUser);
+  });
+}
+
+/* =========================
+   SEAT OPTIONS
+========================= */
+function seatOptionsForBrand(brand){
+  switch (brand){
+    case "JECKO":
+      return [
+        { value:"JECKO_SILVER_SOFT", label:"Silver (Softer)" },
+        { value:"JECKO_CLOSEDGE_STANDARD", label:"Closedge (Standard/Stiffer)" }
+      ];
+    case "TILLETT":
+      return [
+        { value:"TILLETT_VTI_SUPER_FLEX", label:"VTi (Super flexible)" },
+        { value:"TILLETT_VG_FLEX", label:"VG (Flexible)" },
+        { value:"TILLETT_T_MEDIUM", label:"t (Medium)" },
+        { value:"TILLETT_STANDARD_STIFF", label:"Standard (Stiffer)" },
+        { value:"TILLETT_VGR_HYBRID", label:"VGR (Hybrid)" },
+        { value:"TILLETT_VRS_HYBRID", label:"VRS (Hybrid)" }
+      ];
+    case "FREELINE":
+      return [
+        { value:"FREELINE_SOFT", label:"Soft" },
+        { value:"FREELINE_MEDIUM", label:"Medium" },
+        { value:"FREELINE_HARD", label:"Hard" }
+      ];
+    case "OTK":
+      return [
+        { value:"OTK_SOFT", label:"Softer" },
+        { value:"OTK_STANDARD", label:"Standard" },
+        { value:"OTK_HARD", label:"Stiffer" }
+      ];
+    default:
+      return [
+        { value:"UNKNOWN", label:"Unknown" },
+        { value:"SOFT", label:"Soft" },
+        { value:"MEDIUM", label:"Medium" },
+        { value:"HARD", label:"Hard" }
+      ];
+  }
+}
+function seatHintFor(brand){
+  if (brand === "JECKO") return "JECKO: Silver = softer; Closedge = slightly stiffer / releases grip.";
+  if (brand === "TILLETT") return "Tillett: VTi softest, VG soft, t medium, Standard stiff, hybrids in-between.";
+  return "";
+}
+function refreshSeatStiffness(){
+  const brand = el("seatBrand").value;
+  const sel = el("seatStiffness");
+  const hint = el("seatHint");
+  const opts = seatOptionsForBrand(brand);
+  sel.innerHTML = "";
+  for (const o of opts){
+    const opt = document.createElement("option");
+    opt.value = o.value;
+    opt.textContent = o.label;
+    sel.appendChild(opt);
+  }
+  hint.textContent = seatHintFor(brand);
+  const saved = state.seatStiffness;
+  if (saved && opts.some(o=>o.value===saved)) sel.value = saved;
+}
+
+/* =========================
+   AXLE OPTIONS
+========================= */
+function axleOptionsForBrand(brand){
+  switch (brand){
+    case "OTK":
+      return [
+        { value:"U", label:"U (very soft)" },
+        { value:"Q", label:"Q (soft)" },
+        { value:"N", label:"N (medium)" },
+        { value:"H", label:"H (hard)" },
+        { value:"HD", label:"HD (harder)" },
+        { value:"HH", label:"HH (very hard)" },
+        { value:"UNKNOWN", label:"Unknown" }
+      ];
+    case "KART_REPUBLIC":
+      return [
+        { value:"SOFT", label:"Soft" },
+        { value:"MEDIUM", label:"Medium" },
+        { value:"HARD", label:"Hard" },
+        { value:"HH", label:"HH (very hard)" },
+        { value:"UNKNOWN", label:"Unknown" }
+      ];
+    case "ARROW":
+      return [
+        { value:"EXTRA_SOFT", label:"Extra soft" },
+        { value:"SOFT", label:"Soft" },
+        { value:"MEDIUM", label:"Medium" },
+        { value:"MEDIUM_HARD", label:"Medium hard" },
+        { value:"HARD", label:"Hard" },
+        { value:"EXTRA_HARD", label:"Extra hard" },
+        { value:"UNKNOWN", label:"Unknown" }
+      ];
+    default:
+      return [
+        { value:"SOFT", label:"Soft" },
+        { value:"MEDIUM", label:"Medium" },
+        { value:"HARD", label:"Hard" },
+        { value:"UNKNOWN", label:"Unknown" }
+      ];
+  }
+}
+function refreshAxleStiffness(){
+  const brand = el("axleBrand").value;
+  const sel = el("axleStiffness");
+  const prev = sel.value;
+  const opts = axleOptionsForBrand(brand);
+  sel.innerHTML = "";
+  for (const o of opts){
+    const opt = document.createElement("option");
+    opt.value = o.value;
+    opt.textContent = o.label;
+    sel.appendChild(opt);
+  }
+  if (prev && opts.some(o=>o.value===prev)){
+    sel.value = prev;
+    return;
+  }
+  const fallback =
+    opts.find(o=>o.value==="MEDIUM") ||
+    opts.find(o=>o.value==="N") ||
+    opts[0];
+  if (fallback) sel.value = fallback.value;
+}
+
+/* =========================
+   ENCODERS (tiny adjustments only)
+========================= */
+function encSoftMedHard(v){
+  if (v === "EXTRA_SOFT") return -0.8;
+  if (v === "U") return -0.8;
+  if (v === "Q") return -0.4;
+  if (v === "N") return 0.0;
+  if (v === "H") return 0.4;
+  if (v === "HD") return 0.6;
+  if (v === "HH") return 0.8;
+  if (v === "SOFT") return -0.6;
+  if (v === "MEDIUM") return 0.0;
+  if (v === "MEDIUM_HARD") return 0.3;
+  if (v === "HARD") return 0.6;
+  if (v === "EXTRA_HARD") return 0.8;
+  return 0.0;
+}
+function encAxleSize(v){
+  if (v === "1000") return -0.2;
+  if (v === "1015") return 0.0;
+  if (v === "1030") return 0.2;
+  return 0.0;
+}
+function encRimType(v){
+  if (v === "STEEL") return -0.4;
+  if (v === "ALLOY") return 0.0;
+  if (v === "MAG") return 0.2;
+  if (v === "OXITECH_AMV9F") return 0.7;
+  return 0.0;
+}
+function encFrontEnd(v){
+  if (v === "CALM") return -0.4;
+  if (v === "NEUTRAL") return 0.0;
+  if (v === "AGGRESSIVE") return 0.4;
+  return 0.0;
+}
+function encEngine(v){
+  if (v === "TIRED") return -0.4;
+  if (v === "BASELINE") return 0.0;
+  if (v === "STRONG") return 0.4;
+  return 0.0;
+}
+function encConditions(v){
+  if (v === "GREEN") return -0.4;
+  if (v === "NORMAL") return 0.0;
+  if (v === "RUBBERED") return 0.4;
+  if (v === "DUSTY") return -0.2;
+  if (v === "DAMP") return -0.3;
+  return 0.0;
+}
+function encDriverStyle(v){
+  if (v === "SMOOTH") return -0.2;
+  if (v === "NEUTRAL") return 0.0;
+  if (v === "AGGRESSIVE") return 0.2;
+  return 0.0;
+}
+function encSeatStiffness(stiff){
+  switch (stiff){
+    case "JECKO_SILVER_SOFT": return -0.35;
+    case "JECKO_CLOSEDGE_STANDARD": return 0.10;
+
+    case "TILLETT_VTI_SUPER_FLEX": return -0.55;
+    case "TILLETT_VG_FLEX": return -0.30;
+    case "TILLETT_T_MEDIUM": return 0.00;
+    case "TILLETT_STANDARD_STIFF": return 0.30;
+    case "TILLETT_VGR_HYBRID": return 0.15;
+    case "TILLETT_VRS_HYBRID": return 0.10;
+
+    case "FREELINE_SOFT": return -0.25;
+    case "FREELINE_MEDIUM": return 0.00;
+    case "FREELINE_HARD": return 0.25;
+
+    case "OTK_SOFT": return -0.20;
+    case "OTK_STANDARD": return 0.00;
+    case "OTK_HARD": return 0.20;
+
+    case "SOFT": return -0.25;
+    case "MEDIUM": return 0.00;
+    case "HARD": return 0.25;
+    default: return 0.0;
+  }
+}
+
+/* =========================
+   LEARNING KEY + EMA
+========================= */
+function cleanTag(s){ return String(s||"").trim().toLowerCase().replace(/\s+/g,"_").slice(0,60); }
+function buildLearnKey(tyreKey, trackId){
+  const parts = [
+    tyreKey, trackId,
+    "ch="+el("chassisFamily").value,
+    "axS="+el("axleStiffness").value,
+    "axZ="+el("axleSize").value,
+    "rim="+el("rimType").value,
+    "seatB="+el("seatBrand").value,
+    "seatS="+el("seatStiffness").value,
+    "bar="+el("frontBar").value,
+    "eng="+el("engineSetup").value,
+    "cond="+el("conditions").value
+  ];
+  const custom = (el("customTags").value||"").split(",").map(x=>cleanTag(x)).filter(Boolean).slice(0,6);
+  for (const c of custom) parts.push("tag="+c);
+  return parts.join("::");
+}
+function updateEMA(key, gainF, gainR){
+  state.learn[key] ||= { avgGainF:null, avgGainR:null, n:0 };
+  const L = state.learn[key];
+  const alpha = 0.35;
+  L.avgGainF = (L.avgGainF==null) ? gainF : (1-alpha)*L.avgGainF + alpha*gainF;
+  L.avgGainR = (L.avgGainR==null) ? gainR : (1-alpha)*L.avgGainR + alpha*gainR;
+  L.n = (L.n||0) + 1;
+  save();
+  return L;
+}
+
+/* =========================
+   SMALL SETUP ADJUSTMENTS
+========================= */
+function computeSmallAdjustments(){
+  const grip = el("grip").value;
+  const sessionLen = num(el("sessionLen").value);
+  const heatCycles = num(el("heatCycles").value) ?? 0;
+
+  const amb = num(el("ambientTemp").value);
+  const hum = num(el("humidity").value);
+
+  let gripAdj = 0;
+  if (grip==="LOW") gripAdj = -0.10;
+  if (grip==="HIGH") gripAdj = 0.12;
+
+  let lengthAdj = 0;
+  if (Number.isFinite(sessionLen)){
+    if (sessionLen >= 12) lengthAdj = 0.08;
+    if (sessionLen <= 5) lengthAdj = -0.04;
+  }
+
+  let ageAdj = 0;
+  if (heatCycles >= 12) ageAdj = -0.04;
+  if (heatCycles >= 20) ageAdj = -0.08;
+
+  let weatherAdj = 0;
+  if (Number.isFinite(amb)){
+    weatherAdj += clamp((20 - amb) * 0.02, -0.35, 0.35);
+  }
+  if (Number.isFinite(hum)){
+    weatherAdj += clamp((50 - hum) * 0.004, -0.12, 0.12);
+  }
+
+  const axle = clamp(encSoftMedHard(el("axleStiffness").value) + encAxleSize(el("axleSize").value), -1, 1);
+  const frontAgg = clamp(encFrontEnd(el("frontEnd").value) + 0.2*encSoftMedHard(el("frontBar").value), -1, 1);
+  const rim = clamp(encRimType(el("rimType").value), -1, 1);
+  const seat = clamp(encSeatStiffness(el("seatStiffness").value), -1, 1);
+  const engine = clamp(encEngine(el("engineSetup").value), -1, 1);
+  const surface = clamp(encConditions(el("conditions").value), -1, 1);
+  const style = clamp(encDriverStyle(el("driverStyle").value), -1, 1);
+
+  const setupAdjF = 0.03*frontAgg + 0.02*rim + 0.02*seat + 0.01*engine + 0.01*surface + 0.01*style - 0.02*axle;
+  const setupAdjR = 0.02*frontAgg + 0.02*rim + 0.03*seat + 0.01*engine + 0.01*surface + 0.01*style - 0.03*axle;
+
+  return { gripAdj, lengthAdj, ageAdj, weatherAdj, setupAdjF, setupAdjR };
+}
+
+/* =========================
+   CONFIDENCE
+========================= */
+function renderConfidence(score, why){
+  const bar = el("confBar");
+  const sc = el("confScore");
+  const wh = el("confWhy");
+
+  sc.textContent = score + "%";
+  wh.textContent = why;
+
+  bar.style.width = score + "%";
+  let bg = "rgba(251,113,133,.9)";
+  if (score >= 70) bg = "rgba(96,165,250,.9)";
+  else if (score >= 45) bg = "rgba(251,191,36,.9)";
+  bar.style.background = bg;
+}
+
+function computeConfidence(last){
+  let score = 20;
+  const reasons = [];
+
+  const hasHotF = last.hotF != null;
+  const hasHotR = last.hotR != null;
+  const hasColdF = last.coldF != null;
+  const hasColdR = last.coldR != null;
+
+  if (hasColdF && hasColdR) { score += 10; }
+  if (hasHotF) { score += 20; reasons.push("hot front entered"); }
+  if (hasHotR) { score += 20; reasons.push("hot rear entered"); }
+
+  if (plausibleGain(last.gainObsF) && plausibleGain(last.gainObsR)) {
+    score += 15;
+    reasons.push("measured gain used");
+  } else if (last.srcF === "LEARNED" || last.srcR === "LEARNED") {
+    score += 10;
+    reasons.push("learned gain used");
+  } else {
+    reasons.push("baseline gain used");
+  }
+
+  const n = last.learn?.n || 0;
+  const learnBoost = Math.min(20, n * 4);
+  if (learnBoost > 0) reasons.push(`${n} learned sessions`);
+  score += learnBoost;
+
+  if (last.setup?.ambientTemp != null) { score += 3; reasons.push("ambient entered"); }
+  if (last.setup?.humidity != null) { score += 3; reasons.push("humidity entered"); }
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+
+  const why =
+    (reasons.length ? reasons.slice(0,4).join(" • ") : "Tap Analyze") +
+    (reasons.length > 4 ? "…" : "");
+
+  return { score, why };
+}
+
+/* =========================
+   WEATHER (GPS -> Open-Meteo)
+========================= */
+async function fetchWeather(lat, lon){
+  const url =
+    "https://api.open-meteo.com/v1/forecast"
+    + "?latitude=" + encodeURIComponent(lat)
+    + "&longitude=" + encodeURIComponent(lon)
+    + "&current=temperature_2m,relative_humidity_2m"
+    + "&timezone=auto";
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Weather HTTP " + res.status);
+  const data = await res.json();
+  const cur = data.current || {};
+  const t = Number(cur.temperature_2m);
+  const h = Number(cur.relative_humidity_2m);
+  if (!Number.isFinite(t) || !Number.isFinite(h)) throw new Error("Weather missing values");
+  return { t, h, time: cur.time };
+}
+function useGPSWeather(){
+  const s = el("weatherStatus");
+  s.textContent = "Requesting location…";
+  if (!navigator.geolocation){ s.textContent = "No GPS available"; return; }
+  navigator.geolocation.getCurrentPosition(async (pos)=>{
+    try{
+      s.textContent = "Fetching weather…";
+      const w = await fetchWeather(pos.coords.latitude, pos.coords.longitude);
+      el("ambientTemp").value = w.t;
+      el("humidity").value = w.h;
+      s.textContent = `${w.t.toFixed(1)}°C, ${Math.round(w.h)}% (now)`;
+    }catch(e){
+      s.textContent = "Weather error: " + (e.message||e);
+    }
+  }, ()=>{ s.textContent = "Location denied/unavailable"; }, { timeout:12000, maximumAge:600000 });
+}
+
+/* =========================
+   ANALYZE
+========================= */
+function analyze(){
+  const tyreKey = el("tyre").value;
+  const trackId = el("track").value;
+  const tyre = TYRES[tyreKey];
+
+  let targetHotF = num(el("targetHotF").value) ?? tyre.defaultTF;
+  let targetHotR = num(el("targetHotR").value) ?? tyre.defaultTR;
+  let targetClampedWarn = false;
+  if (targetHotF > tyre.maxHot) { targetHotF = tyre.maxHot; targetClampedWarn = true; }
+  if (targetHotR > tyre.maxHot) { targetHotR = tyre.maxHot; targetClampedWarn = true; }
+  el("targetHotF").value = targetHotF;
+  el("targetHotR").value = targetHotR;
+
+  const coldF = num(el("coldF").value);
+  const coldR = num(el("coldR").value);
+  const hotF  = num(el("hotF").value);
+  const hotR  = num(el("hotR").value);
+  const offsetFL = num(el("offsetFL").value) ?? 0;
+  const offsetFR = num(el("offsetFR").value) ?? 0;
+  const offsetRL = num(el("offsetRL").value) ?? 0;
+  const offsetRR = num(el("offsetRR").value) ?? 0;
+
+  if (coldF==null || coldR==null){
+    el("out").innerHTML = `<span class="pill warn">Enter cold F & R</span>`;
+    return null;
+  }
+
+  const gainObsF = (hotF!=null) ? (hotF - coldF) : null;
+  const gainObsR = (hotR!=null) ? (hotR - coldR) : null;
+
+  const learnK = buildLearnKey(tyreKey, trackId);
+  const learned = state.learn[learnK] || null;
+
+  const nudge = (TRACK_BASELINE_NUDGE[trackId] && TRACK_BASELINE_NUDGE[trackId][tyreKey]) ? TRACK_BASELINE_NUDGE[trackId][tyreKey] : null;
+  const baseFallbackF = tyre.baselineGainF + (nudge?.dF || 0);
+  const baseFallbackR = tyre.baselineGainR + (nudge?.dR || 0);
+
+  const baseGainF = plausibleGain(gainObsF) ? gainObsF : (learned?.avgGainF!=null ? learned.avgGainF : baseFallbackF);
+  const baseGainR = plausibleGain(gainObsR) ? gainObsR : (learned?.avgGainR!=null ? learned.avgGainR : baseFallbackR);
+  const srcF = plausibleGain(gainObsF) ? "MEASURED" : (learned?.avgGainF!=null ? "LEARNED" : (nudge?"BASELINE+TRACK":"BASELINE"));
+  const srcR = plausibleGain(gainObsR) ? "MEASURED" : (learned?.avgGainR!=null ? learned.avgGainR : (nudge?"BASELINE+TRACK":"BASELINE"));
+  // fix: srcR value must be a string, not number
+  const srcR2 = plausibleGain(gainObsR) ? "MEASURED" : (learned?.avgGainR!=null ? "LEARNED" : (nudge?"BASELINE+TRACK":"BASELINE"));
+
+  const adj = computeSmallAdjustments();
+  const rimType = el("rimType").value;
+  const rimLearn = state.rimLearn?.[rimType] || null;
+  const rimLearnAdjF = rimLearn?.avgAdjF ?? 0;
+  const rimLearnAdjR = rimLearn?.avgAdjR ?? 0;
+  const expGainF = clamp(baseGainF + adj.gripAdj + adj.lengthAdj + adj.ageAdj + adj.weatherAdj + adj.setupAdjF + rimLearnAdjF, 2.0, 6.5);
+  const expGainR = clamp(baseGainR + adj.gripAdj + adj.lengthAdj + adj.ageAdj + adj.weatherAdj + adj.setupAdjR + rimLearnAdjR, 2.0, 6.5);
+
+  let nextColdF = clamp(targetHotF - expGainF, tyre.bounds.min, tyre.bounds.max);
+  let nextColdR = clamp(targetHotR - expGainR, tyre.bounds.min, tyre.bounds.max);
+
+  const pills = [];
+  if (targetClampedWarn){
+    pills.push(`<span class="pill warn">Target hot clamped to max (${tyre.maxHot})</span>`);
+  }
+
+  if (hotF!=null && hotF > targetHotF + 0.05 && nextColdF > coldF){
+    nextColdF = Math.min(coldF, nextColdF);
+    pills.push(`<span class="pill bad">Sanity: F ended hot high → won't raise cold</span>`);
+  }
+  if (hotR!=null && hotR > targetHotR + 0.05 && nextColdR > coldR){
+    nextColdR = Math.min(coldR, nextColdR);
+    pills.push(`<span class="pill bad">Sanity: R ended hot high → won't raise cold</span>`);
+  }
+
+  const nextColdFL = clamp(nextColdF + offsetFL, tyre.bounds.min, tyre.bounds.max);
+  const nextColdFR = clamp(nextColdF + offsetFR, tyre.bounds.min, tyre.bounds.max);
+  const nextColdRL = clamp(nextColdR + offsetRL, tyre.bounds.min, tyre.bounds.max);
+  const nextColdRR = clamp(nextColdR + offsetRR, tyre.bounds.min, tyre.bounds.max);
+
+  if (hotF!=null && hotF > tyre.maxHot + 0.05) pills.push(`<span class="pill bad">Front hot over max (${tyre.maxHot})</span>`);
+  if (hotR!=null && hotR > tyre.maxHot + 0.05) pills.push(`<span class="pill bad">Rear hot over max (${tyre.maxHot})</span>`);
+
+  let learnInfo = null;
+  if (plausibleGain(gainObsF) && plausibleGain(gainObsR)){
+    const modelBaseF = (learned?.avgGainF!=null ? learned.avgGainF : baseFallbackF);
+    const modelBaseR = (learned?.avgGainR!=null ? learned.avgGainR : baseFallbackR);
+    const modelGainF = clamp(modelBaseF + adj.gripAdj + adj.lengthAdj + adj.ageAdj + adj.weatherAdj + adj.setupAdjF, 2.0, 6.5);
+    const modelGainR = clamp(modelBaseR + adj.gripAdj + adj.lengthAdj + adj.ageAdj + adj.weatherAdj + adj.setupAdjR, 2.0, 6.5);
+    updateRimLearn(rimType, gainObsF - modelGainF, gainObsR - modelGainR);
+
+    const L = updateEMA(learnK, gainObsF, gainObsR);
+    learnInfo = { n:L.n, avgGainF:L.avgGainF, avgGainR:L.avgGainR, key:learnK };
+  } else {
+    learnInfo = { n: learned?.n || 0, avgGainF: learned?.avgGainF ?? null, avgGainR: learned?.avgGainR ?? null, key:learnK };
+  }
+
+  const summary = {
+    ts: nowISO(),
+    tyreKey, tyreName: tyre.name, trackId,
+    targetHotF, targetHotR, maxHot: tyre.maxHot,
+    bounds: tyre.bounds,
+    coldF, coldR, hotF, hotR,
+    gainObsF, gainObsR,
+    baseGainF, baseGainR, srcF, srcR: srcR2,
+    expGainF, expGainR,
+    nextColdF, nextColdR,
+    nextColdFL, nextColdFR, nextColdRL, nextColdRR,
+    setup: {
+      chassisFamily: el("chassisFamily").value,
+      driverStyle: el("driverStyle").value,
+      frontBar: el("frontBar").value,
+      axleBrand: el("axleBrand").value,
+      axleStiffness: el("axleStiffness").value,
+      axleSize: el("axleSize").value,
+      rimType: el("rimType").value,
+      engineSetup: el("engineSetup").value,
+      frontEnd: el("frontEnd").value,
+      conditions: el("conditions").value,
+      grip: el("grip").value,
+      seatBrand: el("seatBrand").value,
+      seatStiffness: el("seatStiffness").value,
+      heatCycles: num(el("heatCycles").value) ?? 0,
+      totalLaps: num(el("totalLaps").value) ?? 0,
+      sessionLen: num(el("sessionLen").value),
+      ambientTemp: num(el("ambientTemp").value),
+      humidity: num(el("humidity").value),
+      offsets: { fl: offsetFL, fr: offsetFR, rl: offsetRL, rr: offsetRR },
+      customTags: (el("customTags").value||"").trim()
+    },
+    learn: learnInfo,
+    warnings: pills.map(x=>x.replace(/<[^>]+>/g,""))
+  };
+
+  state.last = summary;
+  state.tyreKey = tyreKey;
+  state.trackId = trackId;
+  state.targetHotF = targetHotF;
+  state.targetHotR = targetHotR;
+  state.seatBrand = el("seatBrand").value;
+  state.seatStiffness = el("seatStiffness").value;
+  state.offsets = { fl: offsetFL, fr: offsetFR, rl: offsetRL, rr: offsetRR };
+  save();
+
+  const hasOffsets =
+    Math.abs(offsetFL) > 0.01 || Math.abs(offsetFR) > 0.01 ||
+    Math.abs(offsetRL) > 0.01 || Math.abs(offsetRR) > 0.01;
+
+  el("out").innerHTML = `
+    ${pills.length ? `<div style="margin-bottom:10px">${pills.join("")}</div>` : ""}
+    <div class="row">
+      <div>
+        <div class="muted">App Next Cold Front</div>
+        <div class="big">${r1(nextColdF)} psi</div>
+        ${hasOffsets ? `<div class="muted">L/R: ${r1(nextColdFL)} / ${r1(nextColdFR)} psi</div>` : ""}
+        <div class="muted">Gain used: ${expGainF.toFixed(2)} (${srcF})${gainObsF!=null?` • Measured: ${r1(gainObsF)}`:""}</div>
+      </div>
+      <div>
+        <div class="muted">App Next Cold Rear</div>
+        <div class="big">${r1(nextColdR)} psi</div>
+        ${hasOffsets ? `<div class="muted">L/R: ${r1(nextColdRL)} / ${r1(nextColdRR)} psi</div>` : ""}
+        <div class="muted">Gain used: ${expGainR.toFixed(2)} (${srcR2})${gainObsR!=null?` • Measured: ${r1(gainObsR)}`:""}</div>
+      </div>
+    </div>
+    <div class="hint" style="margin-top:10px">
+      Targets hot: F ${r1(targetHotF)} / R ${r1(targetHotR)} (max hot ${tyre.maxHot}) • Learned sessions for this setup: ${learnInfo.n}
+    </div>
+  `;
+
+  el("learnHint").textContent =
+    (plausibleGain(gainObsF) && plausibleGain(gainObsR))
+    ? `Learning updated for this tyre+track+setup. New avg gain ≈ ${r1(learnInfo.avgGainF)}F / ${r1(learnInfo.avgGainR)}R.`
+    : `Tip: enter hot F/R (and accurate gauge) to improve learning.`;
+
+  const conf = computeConfidence(summary);
+  renderConfidence(conf.score, conf.why);
+
+  el("debug").textContent = JSON.stringify(summary, null, 2);
+
+  pushLog({
+    ts: summary.ts,
+    tyre: summary.tyreName,
+    track: summary.trackId,
+    coldF: r1(summary.coldF), coldR: r1(summary.coldR),
+    hotF: summary.hotF!=null ? r1(summary.hotF) : null,
+    hotR: summary.hotR!=null ? r1(summary.hotR) : null,
+    nextF: r1(summary.nextColdF), nextR: r1(summary.nextColdR),
+    srcF: summary.srcF, srcR: summary.srcR,
+    learnN: summary.learn?.n || 0
+  });
+  renderLog();
+
+  return summary;
+}
+
+/* =========================
+   AI (strict verify + parse + optional override)
+========================= */
+function aiEnabled(){ return !!state.ai?.enabled; }
+
+function buildSystemPromptStrict(maxHot){
+  return [
+    "You are a kart tyre pressure verification assistant for X30 karting.",
+    "Your job is to sanity-check and (if needed) correct the app's next cold pressure recommendation using physics.",
+    "",
+    "Hard rules:",
+    "1) If cold+hot were provided and gain is plausible (2.0–6.5), measured gain MUST be respected over any model prediction.",
+    "2) If last hot is ABOVE target, you MUST NOT recommend a HIGHER cold than last cold for that axle.",
+    "3) Recommend small steps (0.1–0.2 psi) unless the error is very large.",
+    `4) Never recommend exceeding max hot ${maxHot} psi.`,
+    "",
+    "Output format (MUST follow exactly):",
+    "VERDICT: CONFIRM or CORRECT",
+    "RECOMMENDED_COLD_F: <number>",
+    "RECOMMENDED_COLD_R: <number>",
+    "WHY: <short explanation>",
+    "STEP_PLAN: <1-3 short bullets>"
+  ].join("\n");
+}
+
+function buildAiUserPrompt(last){
+  return [
+    "Verify the app recommendation. If anything violates logic, correct it.",
+    "",
+    `App recommends next cold: F ${r1(last.nextColdF)} / R ${r1(last.nextColdR)}`,
+    `Targets hot: F ${r1(last.targetHotF)} / R ${r1(last.targetHotR)} (max hot ${last.maxHot})`,
+    `Last run: cold F ${r1(last.coldF)} / R ${r1(last.coldR)}; hot F ${last.hotF!=null?r1(last.hotF):"?"} / hot R ${last.hotR!=null?r1(last.hotR):"?"}`,
+    "",
+    "DATA_JSON:",
+    JSON.stringify(last)
+  ].join("\n");
+}
+
+async function groqChatStrict(systemPrompt, userPrompt){
+  const key = (state.ai?.key || "").trim();
+  const model = state.ai?.model || "llama-3.1-8b-instant";
+  if (!key) throw new Error("No Groq key saved.");
+  const payload = {
+    model,
+    messages: [
+      { role:"system", content: systemPrompt },
+      { role:"user", content: userPrompt }
+    ],
+    temperature: 0.2,
+    max_tokens: 650
+  };
+  const res = await fetch(GROQ_CHAT_URL, {
+    method:"POST",
+    headers:{
+      "Authorization":"Bearer " + key,
+      "Content-Type":"application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok){
+    const t = await res.text().catch(()=>"(no body)");
+    throw new Error(`Groq HTTP ${res.status}: ${t.slice(0,260)}`);
+  }
+  const data = await res.json();
+  const content = data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error("No Groq response content.");
+  return content;
+}
+
+function parseAi(reply){
+  const v = reply.match(/VERDICT:\s*(CONFIRM|CORRECT)/i);
+  const f = reply.match(/RECOMMENDED_COLD_F:\s*([0-9]+(\.[0-9]+)?)/i);
+  const r = reply.match(/RECOMMENDED_COLD_R:\s*([0-9]+(\.[0-9]+)?)/i);
+  return {
+    verdict: v ? v[1].toUpperCase() : null,
+    coldF: f ? Number(f[1]) : null,
+    coldR: r ? Number(r[1]) : null,
+    raw: reply
+  };
+}
+
+function renderAiResult(parsed){
+  const verdict = parsed.verdict || "REVIEW";
+  const badge =
+    verdict==="CONFIRM" ? `<span class="pill ok">AI CONFIRMED</span>` :
+    verdict==="CORRECT" ? `<span class="pill warn">AI CORRECTED</span>` :
+    `<span class="pill warn">AI REVIEW</span>`;
+
+  if (Number.isFinite(parsed.coldF) && Number.isFinite(parsed.coldR)){
+    el("aiOut").innerHTML = `
+      <div style="margin-bottom:10px">${badge}</div>
+      <div class="row">
+        <div>
+          <div class="muted">AI Recommended Cold Front</div>
+          <div class="big">${r1(parsed.coldF)} psi</div>
+        </div>
+        <div>
+          <div class="muted">AI Recommended Cold Rear</div>
+          <div class="big">${r1(parsed.coldR)} psi</div>
+        </div>
+      </div>
+      <div class="hint" style="margin-top:10px">Full AI response:</div>
+      <pre>${esc(parsed.raw)}</pre>
+    `;
+  } else {
+    el("aiOut").innerHTML = `
+      <div style="margin-bottom:10px">${badge}</div>
+      <div class="hint">AI response (couldn’t parse numbers):</div>
+      <pre>${esc(parsed.raw)}</pre>
+    `;
+  }
+}
+
+function overrideAppDisplayWithAi(parsed){
+  if (!state.last) return;
+  if (!Number.isFinite(parsed.coldF) || !Number.isFinite(parsed.coldR)) return;
+
+  const last = state.last;
+  const tyre = TYRES[last.tyreKey];
+
+  let f = clamp(parsed.coldF, tyre.bounds.min, tyre.bounds.max);
+  let r = clamp(parsed.coldR, tyre.bounds.min, tyre.bounds.max);
+
+  if (last.hotF!=null && last.hotF > last.targetHotF + 0.05) f = Math.min(last.coldF, f);
+  if (last.hotR!=null && last.hotR > last.targetHotR + 0.05) r = Math.min(last.coldR, r);
+
+  const off = last.setup?.offsets || {};
+  const hasOffsets =
+    Math.abs(off.fl||0) > 0.01 || Math.abs(off.fr||0) > 0.01 ||
+    Math.abs(off.rl||0) > 0.01 || Math.abs(off.rr||0) > 0.01;
+  const fL = clamp(f + (off.fl||0), tyre.bounds.min, tyre.bounds.max);
+  const fR = clamp(f + (off.fr||0), tyre.bounds.min, tyre.bounds.max);
+  const rL = clamp(r + (off.rl||0), tyre.bounds.min, tyre.bounds.max);
+  const rR = clamp(r + (off.rr||0), tyre.bounds.min, tyre.bounds.max);
+
+  el("out").innerHTML = `
+    <div style="margin-bottom:10px"><span class="pill warn">DISPLAY OVERRIDDEN BY AI</span></div>
+    <div class="row">
+      <div>
+        <div class="muted">Final Cold Front</div>
+        <div class="big">${r1(f)} psi</div>
+        ${hasOffsets ? `<div class="muted">L/R: ${r1(fL)} / ${r1(fR)} psi</div>` : ""}
+      </div>
+      <div>
+        <div class="muted">Final Cold Rear</div>
+        <div class="big">${r1(r)} psi</div>
+        ${hasOffsets ? `<div class="muted">L/R: ${r1(rL)} / ${r1(rR)} psi</div>` : ""}
+      </div>
+    </div>
+    <div class="hint" style="margin-top:10px">
+      App suggested: F ${r1(last.nextColdF)} / R ${r1(last.nextColdR)} • AI verdict: ${esc(parsed.verdict||"REVIEW")}
+    </div>
+  `;
+
+  state.last.ai = { ts: nowISO(), verdict: parsed.verdict, coldF: f, coldR: r, raw: parsed.raw };
+  save();
+}
+
+async function runAiDoubleCheckAuto(){
+  const last = state.last;
+  if (!last){ el("aiOut").textContent = "No analysis yet."; return; }
+  if (!aiEnabled()){ el("aiOut").textContent = "AI is OFF."; return; }
+
+  el("aiStatus").textContent = "AI check: running…";
+  el("aiOut").textContent = "Checking…";
+
+  try{
+    const sys = buildSystemPromptStrict(last.maxHot);
+    const usr = buildAiUserPrompt(last);
+    const reply = await groqChatStrict(sys, usr);
+    const parsed = parseAi(reply);
+
+    renderAiResult(parsed);
+
+    if (parsed.verdict === "CORRECT" && Number.isFinite(parsed.coldF) && Number.isFinite(parsed.coldR)){
+      overrideAppDisplayWithAi(parsed);
+    } else {
+      state.last.ai = { ts: nowISO(), verdict: parsed.verdict, coldF: parsed.coldF, coldR: parsed.coldR, raw: parsed.raw };
+      save();
+    }
+
+    el("aiStatus").textContent = "AI check: done.";
+  }catch(e){
+    el("aiStatus").textContent = "AI check: error.";
+    el("aiOut").innerHTML = `<span class="pill bad">AI ERROR</span><div class="hint" style="margin-top:8px">${esc(e.message||e)}</div>`;
+  }
+}
+
+/* =========================
+   COPY SUMMARY + RESET
+========================= */
+async function copySummary(){
+  const last = state.last;
+  if (!last) return;
+  const lines = [];
+  lines.push(`Tyre: ${last.tyreName}`);
+  lines.push(`Track: ${last.trackId}`);
+  lines.push(`Targets hot: F ${r1(last.targetHotF)} / R ${r1(last.targetHotR)} (max ${last.maxHot})`);
+  lines.push(`Last: cold F ${r1(last.coldF)} / R ${r1(last.coldR)}; hot F ${last.hotF!=null?r1(last.hotF):"?"} / hot R ${last.hotR!=null?r1(last.hotR):"?"}`);
+  lines.push(`App next cold: F ${r1(last.nextColdF)} / R ${r1(last.nextColdR)} (gain ${last.expGainF.toFixed(2)} ${last.srcF} / ${last.expGainR.toFixed(2)} ${last.srcR})`);
+  const off = last.setup?.offsets || {};
+  const hasOffsets =
+    Math.abs(off.fl||0) > 0.01 || Math.abs(off.fr||0) > 0.01 ||
+    Math.abs(off.rl||0) > 0.01 || Math.abs(off.rr||0) > 0.01;
+  if (hasOffsets){
+    lines.push(`App next cold L/R: F ${r1(last.nextColdFL)} / ${r1(last.nextColdFR)}; R ${r1(last.nextColdRL)} / ${r1(last.nextColdRR)}`);
+  }
+  if (last.ai?.coldF!=null && last.ai?.coldR!=null){
+    lines.push(`AI ${last.ai.verdict||"VERDICT"}: F ${r1(last.ai.coldF)} / R ${r1(last.ai.coldR)}`);
+  }
+  const conf = computeConfidence(last);
+  lines.push(`Confidence: ${conf.score}% (${conf.why})`);
+  const text = lines.join("\n");
+  try{
+    await navigator.clipboard.writeText(text);
+    el("learnHint").textContent = "Copied to clipboard.";
+  }catch{
+    alert(text);
+  }
+}
+
+function resetLearning(){
+  if (!confirm("Reset learning data?")) return;
+  state.learn = {};
+  state.last = null;
+  save();
+  el("out").textContent = "Reset done. Enter new numbers and Analyze.";
+  el("aiOut").textContent = "AI is off, or no analysis yet.";
+  el("debug").textContent = "";
+  el("learnHint").textContent = "";
+  renderConfidence(0, "Tap Analyze.");
+}
+
+/* =========================
+   AI SETTINGS UI
+========================= */
+function refreshAiUI(){
+  el("toggleAiBtn").textContent = state.ai.enabled ? "AI: ON" : "AI: OFF";
+  el("aiStatus").textContent = state.ai.enabled
+    ? "AI runs automatically after Analyze."
+    : "AI is off.";
+}
+function saveAiSettings(){
+  state.ai.key = (el("groqKey").value||"").trim();
+  state.ai.model = el("groqModel").value;
+  save();
+  refreshAiUI();
+}
+function toggleAi(){
+  state.ai.enabled = !state.ai.enabled;
+  save();
+  refreshAiUI();
+}
+
+/* =========================
+   TRACK SELECT UI
+========================= */
+function renderTracks(){
+  const sel = el("track");
+  sel.innerHTML = "";
+  const addGroup = (label, items)=>{
+    const og = document.createElement("optgroup");
+    og.label = label;
+    for (const [id,name] of items){
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = name;
+      og.appendChild(opt);
+    }
+    sel.appendChild(og);
+  };
+  addGroup("Victoria (VIC)", TRACKS.VIC);
+  addGroup("New South Wales (NSW)", TRACKS.NSW);
+  addGroup("ACT", TRACKS.ACT);
+
+  if (state.trackId) sel.value = state.trackId;
+  else sel.value = "ACT_CANBERRA_MARK_WEBBER";
+
+  sel.onchange = ()=>{
+    state.trackId = sel.value;
+    save();
+  };
+}
+
+function renderLog(){
+  const lines = (state.log||[]).map(x=>{
+    return `${x.ts} | ${x.tyre} | ${x.track} | last ${x.coldF}/${x.coldR} -> next ${x.nextF}/${x.nextR} | hot ${x.hotF??"?"}/${x.hotR??"?"} | ${x.srcF}/${x.srcR} | n=${x.learnN}`;
+  });
+  el("logView").textContent = lines.join("\n") || "No sessions saved yet.";
+}
+
+/* =========================
+   INIT
+========================= */
+async function init(){
+  renderTracks();
+  setAppLocked(true);
+
+  el("tyre").value = state.tyreKey || "DUNLOP_DHH";
+  const t = TYRES[el("tyre").value];
+
+  el("targetHotF").value = state.targetHotF ?? t.defaultTF;
+  el("targetHotR").value = state.targetHotR ?? t.defaultTR;
+
+  el("seatBrand").value = state.seatBrand || "JECKO";
+  refreshSeatStiffness();
+  if (state.seatStiffness) el("seatStiffness").value = state.seatStiffness;
+
+  const offs = state.offsets || {};
+  if (offs.fl) el("offsetFL").value = offs.fl;
+  if (offs.fr) el("offsetFR").value = offs.fr;
+  if (offs.rl) el("offsetRL").value = offs.rl;
+  if (offs.rr) el("offsetRR").value = offs.rr;
+
+  refreshAxleStiffness();
+
+  el("groqKey").value = state.ai.key || "";
+  el("groqModel").value = state.ai.model || "llama-3.1-8b-instant";
+  refreshAiUI();
+
+  initSupabase();
+  setupAuthListener();
+
+  // ✅ extra certainty: clear any leftover session immediately so gate always shows
+  try { await supabase.auth.signOut(); } catch {}
+
+  await loadCurrentUser();
+
+  refreshSyncUI();
+  if (currentUser){
+    await syncNow();
+    startSyncPolling();
+  } else {
+    tryAutoSignIn();
+  }
+  setAppLocked(!currentUser);
+  refreshSyncUI();
+
+  if (state.sync.email) el("syncEmail").value = state.sync.email;
+
+  el("syncSignUpBtn").onclick = handleSignUp;
+  el("syncSignInBtn").onclick = handleSignIn;
+  el("syncSignOutBtn").onclick = handleSignOut;
+  el("syncGoogleBtn").onclick = ()=>handleOAuth("google");
+  el("syncAppleBtn").onclick = ()=>handleOAuth("apple");
+  el("syncNowBtn").onclick = ()=>syncNow({ notify:true });
+
+  el("weatherBtn").onclick = useGPSWeather;
+  el("seatBrand").onchange = ()=>{ state.seatBrand = el("seatBrand").value; save(); refreshSeatStiffness(); };
+  el("seatStiffness").onchange = ()=>{ state.seatStiffness = el("seatStiffness").value; save(); };
+  el("axleBrand").onchange = ()=>{ refreshAxleStiffness(); };
+
+  el("tyre").onchange = ()=>{
+    const tt = TYRES[el("tyre").value];
+    el("targetHotF").value = tt.defaultTF;
+    el("targetHotR").value = tt.defaultTR;
+    state.tyreKey = el("tyre").value;
+    save();
+  };
+
+  el("saveAiBtn").onclick = saveAiSettings;
+  el("toggleAiBtn").onclick = toggleAi;
+
+  el("copyBtn").onclick = copySummary;
+  el("resetBtn").onclick = resetLearning;
+
+  el("clearAiBtn").onclick = ()=>{ el("aiOut").textContent = "Cleared."; };
+
+  el("analyzeBtn").onclick = async ()=>{
+    state.tyreKey = el("tyre").value;
+    state.trackId = el("track").value;
+    state.targetHotF = num(el("targetHotF").value) ?? TYRES[state.tyreKey].defaultTF;
+    state.targetHotR = num(el("targetHotR").value) ?? TYRES[state.tyreKey].defaultTR;
+    save();
+
+    const last = analyze();
+    if (!last) return;
+
+    if (aiEnabled()){
+      await runAiDoubleCheckAuto();
+    } else {
+      el("aiOut").textContent = "AI is OFF.";
+    }
+  };
+
+  if (state.last){
+    el("out").innerHTML = `<span class="pill ok">Loaded last analysis</span><div class="hint" style="margin-top:8px">Tap Analyze to recompute.</div>`;
+    el("debug").textContent = JSON.stringify(state.last, null, 2);
+
+    const conf = computeConfidence(state.last);
+    renderConfidence(conf.score, conf.why);
+
+    if (state.last.ai?.raw){
+      el("aiOut").innerHTML = `<span class="pill ok">Last AI saved</span><div class="hint" style="margin-top:8px">Tap Analyze to run again.</div>`;
+    }
+  } else {
+    renderConfidence(0, "Tap Analyze.");
+  }
+  renderLog();
+}
+init();
+</script>
+</body>
+</html>
