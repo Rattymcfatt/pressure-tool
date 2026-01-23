@@ -71,7 +71,10 @@
 
 <div id="authGate">
   <div class="card">
-    <h3 style="margin:0 0 8px">Sign up to continue</h3>
+    <h3 style="margin:0 0 8px">Login required</h3>
+    <div class="hint" style="margin:0 0 10px">
+      This app is locked until you sign in. You will be asked to login every time you open it.
+    </div>
     <div class="row">
       <div>
         <label>Email</label>
@@ -82,16 +85,9 @@
         <input id="syncPassword" type="password" placeholder="at least 6 chars">
       </div>
     </div>
-
-    <!-- NOTE: forced-login mode: no "remember me" (always login each time) -->
-
     <div class="row" style="margin-top:10px">
       <button class="secondary" id="syncSignUpBtn" type="button">Sign up</button>
       <button class="secondary" id="syncSignInBtn" type="button">Sign in</button>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <button class="secondary" id="syncGoogleBtn" type="button">Sign in with Google</button>
-      <button class="secondary" id="syncAppleBtn" type="button">Sign in with Apple</button>
     </div>
     <div class="hint" id="syncStatus">Login required.</div>
   </div>
@@ -351,6 +347,9 @@
       <button class="secondary" id="syncSignOutBtn" type="button">Sign out</button>
       <button class="secondary" id="syncNowBtn" type="button">Sync now</button>
     </div>
+    <div class="hint" style="margin-top:8px">
+      This app <b>requires login every time</b>. No sessions are saved on this device.
+    </div>
   </section>
 
   <!-- RESULTS -->
@@ -435,33 +434,80 @@ const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
 ========================= */
 const KEY = "kart_pressure_setup_conf_ai_v2";
 const state = (()=>{ try{return JSON.parse(localStorage.getItem(KEY)||"{}")}catch{return{}} })();
-state.learn ||= {};
+state.learn ||= {};   // key -> { avgGainF, avgGainR, n }
 state.last ||= null;
 state.ai ||= { enabled:false, key:"", model:"llama-3.1-8b-instant" };
-state.log ||= [];
-state.rimLearn ||= {};
+state.log ||= []; // most recent first
+state.rimLearn ||= {}; // rimType -> { avgAdjF, avgAdjR, n }
 state.offsets ||= { fl:0, fr:0, rl:0, rr:0 };
 
-// FORCED LOGIN: no remember-me / no stored password
-state.sync ||= { enabled:true, remember:false, email:"", password:"", lastPull:null, lastPush:null };
-
+// login-every-time: do NOT store passwords, do not auto-sign-in
+state.sync ||= { enabled:true, email:"", lastPull:null, lastPush:null };
 state.lastUpdated ||= null;
 
+/* =========================
+   SUPABASE CONFIG (EDIT THESE)
+========================= */
 const SUPABASE_URL = "https://scvyhioronefrknfbrno.supabase.co";
-const SUPABASE_KEY = "sb_publishable_JgaZfdhpvqDxsn_CrTGDDw_y0VBeezr";
+const SUPABASE_KEY = "sb_publishable_JgaZfdhpvqDxsn_CrTGDDw_y0VBeezr"; // MUST be anon/public key (usually starts with eyJ...)
 const SUPABASE_TABLE = "pressure_state";
+
 let supabase = null;
 let syncTimer = null;
 let syncPushTimer = null;
 let suppressSync = false;
 let currentUser = null;
-let autoSignInAttempted = false;
 let syncStatusTimer = null;
 
+/* =========================
+   FORCE LOGIN EVERY LOAD
+========================= */
+const PROJECT_REF = (SUPABASE_URL.match(/https:\/\/([a-z0-9-]+)\.supabase\.co/i)?.[1]) || "";
+
+function clearSupabaseAuthStorage(){
+  try{
+    for (const k of Object.keys(localStorage)){
+      if (k.startsWith("sb-") && (PROJECT_REF ? k.includes(PROJECT_REF) : k.includes("auth-token"))){
+        localStorage.removeItem(k);
+      }
+    }
+    for (const k of Object.keys(sessionStorage)){
+      if (k.startsWith("sb-") && (PROJECT_REF ? k.includes(PROJECT_REF) : k.includes("auth-token"))){
+        sessionStorage.removeItem(k);
+      }
+    }
+  }catch{}
+}
+
+async function hardForceLogoutOnLoad(){
+  // lock immediately
+  currentUser = null;
+  setAppLocked(true);
+  refreshSyncUI();
+
+  // clear any stored tokens to prevent auto-login
+  clearSupabaseAuthStorage();
+
+  // best-effort sign out (server side)
+  try{
+    initSupabase();
+    if (supabase) await supabase.auth.signOut();
+  }catch{}
+
+  currentUser = null;
+  setAppLocked(true);
+  refreshSyncUI();
+}
+
+/* =========================
+   SAVE + LOG
+========================= */
 function save(opts){
   const o = opts || {};
   if (!o.skipTimestamp) state.lastUpdated = nowISO();
   localStorage.setItem(KEY, JSON.stringify(state));
+
+  // if logged in, push changes to Supabase
   if (!o.skipSync && syncEnabled() && !suppressSync){
     queueSyncPush();
   }
@@ -522,31 +568,26 @@ function flashSyncStatus(msg){
     refreshSyncUI();
   }, 2000);
 }
-
-/* =========================
-   SUPABASE INIT (FORCED LOGIN MODE)
-   - persistSession: false  ✅ (Option A)
-   - also clear any existing session on load for certainty
-========================= */
 function initSupabase(){
   if (supabase) return;
   if (!window.supabase){
     setSyncStatus("Supabase SDK missing.");
     return;
   }
+
+  // IMPORTANT: Login every time. No persistent sessions.
   supabase = window.supabase.createClient(
     SUPABASE_URL,
     SUPABASE_KEY,
     {
       auth: {
-        persistSession: false,     // ✅ FORCE LOGIN EVERY TIME
+        persistSession: false,
         autoRefreshToken: false,
-        detectSessionInUrl: true
+        detectSessionInUrl: false // email/password only
       }
     }
   );
 }
-
 function refreshSyncUI(){
   const signOutBtn = el("syncSignOutBtn");
   const syncBtn = el("syncNowBtn");
@@ -567,15 +608,6 @@ function setAppLocked(locked){
   if (analyzeBtn) analyzeBtn.disabled = locked;
   if (clearAiBtn) clearAiBtn.disabled = locked;
 }
-
-// FORCED LOGIN: no remember-me logic (kept as stubs to avoid refactors)
-function updateRememberedCreds(_email, _password){
-  state.sync.remember = false;
-  state.sync.email = "";
-  state.sync.password = "";
-  save({ skipTimestamp:true, skipSync:true });
-}
-
 function buildSyncPayload(){
   const payload = JSON.parse(JSON.stringify(state));
   delete payload.sync;
@@ -585,28 +617,33 @@ async function syncPull(){
   if (!syncEnabled()) return;
   initSupabase();
   if (!supabase) return;
+
   const userId = currentUser.id;
   const { data, error } = await supabase
     .from(SUPABASE_TABLE)
     .select("payload, updated_at")
     .eq("user_id", userId)
     .maybeSingle();
+
   if (error){
-    setSyncStatus("Sync pull error.");
+    setSyncStatus("Sync pull error: " + (error.message || "unknown"));
     return;
   }
   if (!data || !data.payload){
     setSyncStatus("No remote data.");
     return;
   }
+
   const remote = data.payload;
   const remoteUpdated = remote.lastUpdated || data.updated_at;
   const localUpdated = state.lastUpdated;
+
   if (!remoteUpdated || (localUpdated && new Date(remoteUpdated) <= new Date(localUpdated))){
     state.sync.lastPull = nowISO();
     save({ skipTimestamp:true, skipSync:true });
     return;
   }
+
   const localSync = state.sync;
   suppressSync = true;
   Object.assign(state, remote);
@@ -614,20 +651,24 @@ async function syncPull(){
   state.sync.lastPull = nowISO();
   save({ skipTimestamp:true, skipSync:true });
   suppressSync = false;
+
   setSyncStatus("Pulled from cloud.");
 }
 async function syncPush(){
   if (!syncEnabled()) return;
   initSupabase();
   if (!supabase) return;
+
   const userId = currentUser.id;
   const payload = buildSyncPayload();
   const updatedAt = payload.lastUpdated || nowISO();
+
   const { error } = await supabase
     .from(SUPABASE_TABLE)
     .upsert({ user_id: userId, payload, updated_at: updatedAt }, { onConflict:"user_id" });
+
   if (error){
-    setSyncStatus("Sync push error.");
+    setSyncStatus("Sync push error: " + (error.message || "unknown"));
     return;
   }
   state.sync.lastPush = nowISO();
@@ -642,17 +683,13 @@ async function syncNow(opts){
   const o = opts || {};
   const notify = !!o.notify;
   if (!syncEnabled()) return;
+
   setSyncStatus("Syncing...");
   await syncPull();
   await syncPush();
+
   if (notify){
-    const keep = confirm("Sync complete. Keep background sync on?");
-    if (!keep){
-      state.sync.enabled = false;
-      save({ skipTimestamp:true, skipSync:true });
-      stopSyncPolling();
-      refreshSyncUI();
-    }
+    alert("Sync complete.");
   }
 }
 function startSyncPolling(){
@@ -665,18 +702,24 @@ function stopSyncPolling(){
 async function handleSignUp(){
   initSupabase();
   if (!supabase) return;
+
   const email = (el("syncEmail")?.value || "").trim();
   const password = (el("syncPassword")?.value || "").trim();
   if (!email || !password){
     setSyncStatus("Email and password required.");
     return;
   }
+
   const { data, error } = await supabase.auth.signUp({ email, password });
   if (error){
-    setSyncStatus("Sign up error.");
+    setSyncStatus("Sign up error: " + (error.message || "unknown"));
     return;
   }
-  updateRememberedCreds(email, password);
+
+  // store email only (no passwords)
+  state.sync.email = email;
+  save({ skipTimestamp:true, skipSync:true });
+
   if (data?.session){
     flashSyncStatus("Signed up and logged in.");
   } else {
@@ -686,68 +729,63 @@ async function handleSignUp(){
 async function handleSignIn(){
   initSupabase();
   if (!supabase) return;
+
   const email = (el("syncEmail")?.value || "").trim();
   const password = (el("syncPassword")?.value || "").trim();
   if (!email || !password){
     setSyncStatus("Email and password required.");
     return;
   }
+
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error){
-    setSyncStatus("Sign in error.");
+    setSyncStatus("Sign in error: " + (error.message || "unknown"));
     return;
   }
-  updateRememberedCreds(email, password);
+
+  state.sync.email = email;
+  save({ skipTimestamp:true, skipSync:true });
+
   flashSyncStatus("Signed in.");
 }
 async function handleSignOut(){
   initSupabase();
   if (!supabase) return;
   await supabase.auth.signOut();
+
+  // lock immediately
   currentUser = null;
-  state.sync.remember = false;
-  state.sync.password = "";
-  save({ skipTimestamp:true, skipSync:true });
   stopSyncPolling();
+  refreshSyncUI();
+  setAppLocked(true);
+
   flashSyncStatus("Signed out.");
 }
-async function handleOAuth(provider){
-  initSupabase();
-  if (!supabase) return;
-  const redirectTo = window.location.origin + window.location.pathname;
-  setSyncStatus("Opening " + provider + " login...");
-  await supabase.auth.signInWithOAuth({ provider, options:{ redirectTo } });
-}
-async function loadCurrentUser(){
-  initSupabase();
-  if (!supabase) return;
-  const { data } = await supabase.auth.getUser();
-  currentUser = data?.user || null;
-}
-
-// FORCED LOGIN: do not auto-sign-in
-async function tryAutoSignIn(){
-  if (autoSignInAttempted) return;
-  autoSignInAttempted = true;
-  return;
-}
-
 function setupAuthListener(){
   initSupabase();
   if (!supabase) return;
-  supabase.auth.onAuthStateChange((_event, session)=>{
-    currentUser = session?.user || null;
-    if (currentUser){
+
+  supabase.auth.onAuthStateChange((event, session)=>{
+    // Only unlock on explicit SIGNED_IN
+    if (event === "SIGNED_IN" && session?.user){
+      currentUser = session.user;
+
       state.sync.enabled = true;
       save({ skipTimestamp:true, skipSync:true });
+
+      setAppLocked(false);
       flashSyncStatus("Signed in as " + (currentUser.email || currentUser.id));
+
       syncNow();
       startSyncPolling();
-    } else {
-      stopSyncPolling();
-      refreshSyncUI();
+      return;
     }
-    setAppLocked(!currentUser);
+
+    // Everything else stays locked
+    currentUser = null;
+    stopSyncPolling();
+    refreshSyncUI();
+    setAppLocked(true);
   });
 }
 
@@ -1019,6 +1057,7 @@ function computeSmallAdjustments(){
   if (heatCycles >= 12) ageAdj = -0.04;
   if (heatCycles >= 20) ageAdj = -0.08;
 
+  // Ambient/Humidity affect expected gain (small + bounded)
   let weatherAdj = 0;
   if (Number.isFinite(amb)){
     weatherAdj += clamp((20 - amb) * 0.02, -0.35, 0.35);
@@ -1178,9 +1217,7 @@ function analyze(){
   const baseGainF = plausibleGain(gainObsF) ? gainObsF : (learned?.avgGainF!=null ? learned.avgGainF : baseFallbackF);
   const baseGainR = plausibleGain(gainObsR) ? gainObsR : (learned?.avgGainR!=null ? learned.avgGainR : baseFallbackR);
   const srcF = plausibleGain(gainObsF) ? "MEASURED" : (learned?.avgGainF!=null ? "LEARNED" : (nudge?"BASELINE+TRACK":"BASELINE"));
-  const srcR = plausibleGain(gainObsR) ? "MEASURED" : (learned?.avgGainR!=null ? learned.avgGainR : (nudge?"BASELINE+TRACK":"BASELINE"));
-  // fix: srcR value must be a string, not number
-  const srcR2 = plausibleGain(gainObsR) ? "MEASURED" : (learned?.avgGainR!=null ? "LEARNED" : (nudge?"BASELINE+TRACK":"BASELINE"));
+  const srcR = plausibleGain(gainObsR) ? "MEASURED" : (learned?.avgGainR!=null ? "LEARNED" : (nudge?"BASELINE+TRACK":"BASELINE"));
 
   const adj = computeSmallAdjustments();
   const rimType = el("rimType").value;
@@ -1236,7 +1273,7 @@ function analyze(){
     bounds: tyre.bounds,
     coldF, coldR, hotF, hotR,
     gainObsF, gainObsR,
-    baseGainF, baseGainR, srcF, srcR: srcR2,
+    baseGainF, baseGainR, srcF, srcR,
     expGainF, expGainR,
     nextColdF, nextColdR,
     nextColdFL, nextColdFR, nextColdRL, nextColdRR,
@@ -1293,7 +1330,7 @@ function analyze(){
         <div class="muted">App Next Cold Rear</div>
         <div class="big">${r1(nextColdR)} psi</div>
         ${hasOffsets ? `<div class="muted">L/R: ${r1(nextColdRL)} / ${r1(nextColdRR)} psi</div>` : ""}
-        <div class="muted">Gain used: ${expGainR.toFixed(2)} (${srcR2})${gainObsR!=null?` • Measured: ${r1(gainObsR)}`:""}</div>
+        <div class="muted">Gain used: ${expGainR.toFixed(2)} (${srcR})${gainObsR!=null?` • Measured: ${r1(gainObsR)}`:""}</div>
       </div>
     </div>
     <div class="hint" style="margin-top:10px">
@@ -1623,58 +1660,52 @@ function renderLog(){
 ========================= */
 async function init(){
   renderTracks();
+
+  // Always start locked until SIGNED_IN
   setAppLocked(true);
 
+  // defaults
   el("tyre").value = state.tyreKey || "DUNLOP_DHH";
   const t = TYRES[el("tyre").value];
 
   el("targetHotF").value = state.targetHotF ?? t.defaultTF;
   el("targetHotR").value = state.targetHotR ?? t.defaultTR;
 
+  // seat
   el("seatBrand").value = state.seatBrand || "JECKO";
   refreshSeatStiffness();
   if (state.seatStiffness) el("seatStiffness").value = state.seatStiffness;
 
+  // offsets
   const offs = state.offsets || {};
   if (offs.fl) el("offsetFL").value = offs.fl;
   if (offs.fr) el("offsetFR").value = offs.fr;
   if (offs.rl) el("offsetRL").value = offs.rl;
   if (offs.rr) el("offsetRR").value = offs.rr;
 
+  // axle
   refreshAxleStiffness();
 
+  // AI restore
   el("groqKey").value = state.ai.key || "";
   el("groqModel").value = state.ai.model || "llama-3.1-8b-instant";
   refreshAiUI();
 
+  // Prefill last email (no passwords stored)
+  if (state.sync.email) el("syncEmail").value = state.sync.email;
+
+  // Supabase auth setup
   initSupabase();
   setupAuthListener();
 
-  // ✅ extra certainty: clear any leftover session immediately so gate always shows
-  try { await supabase.auth.signOut(); } catch {}
-
-  await loadCurrentUser();
+  // Force logout every load (no auto sessions)
+  await hardForceLogoutOnLoad();
 
   refreshSyncUI();
-  if (currentUser){
-    await syncNow();
-    startSyncPolling();
-  } else {
-    tryAutoSignIn();
-  }
-  setAppLocked(!currentUser);
-  refreshSyncUI();
 
-  if (state.sync.email) el("syncEmail").value = state.sync.email;
-
-  el("syncSignUpBtn").onclick = handleSignUp;
-  el("syncSignInBtn").onclick = handleSignIn;
-  el("syncSignOutBtn").onclick = handleSignOut;
-  el("syncGoogleBtn").onclick = ()=>handleOAuth("google");
-  el("syncAppleBtn").onclick = ()=>handleOAuth("apple");
-  el("syncNowBtn").onclick = ()=>syncNow({ notify:true });
-
+  // events
   el("weatherBtn").onclick = useGPSWeather;
+
   el("seatBrand").onchange = ()=>{ state.seatBrand = el("seatBrand").value; save(); refreshSeatStiffness(); };
   el("seatStiffness").onchange = ()=>{ state.seatStiffness = el("seatStiffness").value; save(); };
   el("axleBrand").onchange = ()=>{ refreshAxleStiffness(); };
@@ -1695,7 +1726,20 @@ async function init(){
 
   el("clearAiBtn").onclick = ()=>{ el("aiOut").textContent = "Cleared."; };
 
+  // auth buttons
+  el("syncSignUpBtn").onclick = handleSignUp;
+  el("syncSignInBtn").onclick = handleSignIn;
+  el("syncSignOutBtn").onclick = handleSignOut;
+  el("syncNowBtn").onclick = ()=>syncNow({ notify:true });
+
+  // Analyze button (locked via .lockable + disabled)
   el("analyzeBtn").onclick = async ()=>{
+    if (!currentUser){
+      setSyncStatus("Login required.");
+      setAppLocked(true);
+      return;
+    }
+
     state.tyreKey = el("tyre").value;
     state.trackId = el("track").value;
     state.targetHotF = num(el("targetHotF").value) ?? TYRES[state.tyreKey].defaultTF;
@@ -1712,6 +1756,7 @@ async function init(){
     }
   };
 
+  // show last analysis (still locked until login, but this is just display)
   if (state.last){
     el("out").innerHTML = `<span class="pill ok">Loaded last analysis</span><div class="hint" style="margin-top:8px">Tap Analyze to recompute.</div>`;
     el("debug").textContent = JSON.stringify(state.last, null, 2);
@@ -1725,10 +1770,10 @@ async function init(){
   } else {
     renderConfidence(0, "Tap Analyze.");
   }
+
   renderLog();
 }
 init();
 </script>
 </body>
 </html>
-
