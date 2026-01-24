@@ -1434,8 +1434,10 @@ function analyze(){
   el("targetHotF").value = targetHotF;
   el("targetHotR").value = targetHotR;
 
-  const coldF = num(el("coldF").value);
-  const coldR = num(el("coldR").value);
+  const coldFInput = num(el("coldF").value);
+  const coldRInput = num(el("coldR").value);
+  const coldF = coldFInput;
+  const coldR = coldRInput;
   const hotF  = num(el("hotF").value);
   const hotR  = num(el("hotR").value);
   const offsetFL = num(el("offsetFL").value) ?? 0;
@@ -1443,13 +1445,8 @@ function analyze(){
   const offsetRL = num(el("offsetRL").value) ?? 0;
   const offsetRR = num(el("offsetRR").value) ?? 0;
 
-  if (coldF==null || coldR==null){
-    el("out").innerHTML = `<span class="pill warn">Enter cold F & R</span>`;
-    return null;
-  }
-
-  const gainObsF = (hotF!=null) ? (hotF - coldF) : null;
-  const gainObsR = (hotR!=null) ? (hotR - coldR) : null;
+  const gainObsF = (hotF!=null && coldFInput!=null) ? (hotF - coldFInput) : null;
+  const gainObsR = (hotR!=null && coldRInput!=null) ? (hotR - coldRInput) : null;
 
   const learnK = buildLearnKey(tyreKey, trackId);
   const learned = state.learn[learnK] || null;
@@ -1475,15 +1472,18 @@ function analyze(){
   let nextColdR = clamp(targetHotR - expGainR, tyre.bounds.min, tyre.bounds.max);
 
   const pills = [];
+  if (coldFInput==null || coldRInput==null){
+    pills.push(`<span class="pill warn">Cold missing: using baseline/learned gain</span>`);
+  }
   if (targetClampedWarn){
     pills.push(`<span class="pill warn">Target hot clamped to max (${tyre.maxHot})</span>`);
   }
 
-  if (hotF!=null && hotF > targetHotF + 0.05 && nextColdF > coldF){
+  if (coldF!=null && hotF!=null && hotF > targetHotF + 0.05 && nextColdF > coldF){
     nextColdF = Math.min(coldF, nextColdF);
     pills.push(`<span class="pill bad">Sanity: F ended hot high - won't raise cold</span>`);
   }
-  if (hotR!=null && hotR > targetHotR + 0.05 && nextColdR > coldR){
+  if (coldR!=null && hotR!=null && hotR > targetHotR + 0.05 && nextColdR > coldR){
     nextColdR = Math.min(coldR, nextColdR);
     pills.push(`<span class="pill bad">Sanity: R ended hot high - won't raise cold</span>`);
   }
@@ -1596,7 +1596,8 @@ function analyze(){
     ts: summary.ts,
     tyre: summary.tyreName,
     track: summary.trackId,
-    coldF: r1(summary.coldF), coldR: r1(summary.coldR),
+    coldF: summary.coldF!=null ? r1(summary.coldF) : "?",
+    coldR: summary.coldR!=null ? r1(summary.coldR) : "?",
     hotF: summary.hotF!=null ? r1(summary.hotF) : null,
     hotR: summary.hotR!=null ? r1(summary.hotR) : null,
     nextF: r1(summary.nextColdF), nextR: r1(summary.nextColdR),
@@ -1639,7 +1640,7 @@ function buildAiUserPrompt(last){
     "",
     `App recommends next cold: F ${r1(last.nextColdF)} / R ${r1(last.nextColdR)}`,
     `Targets hot: F ${r1(last.targetHotF)} / R ${r1(last.targetHotR)} (max hot ${last.maxHot})`,
-    `Last run: cold F ${r1(last.coldF)} / R ${r1(last.coldR)}; hot F ${last.hotF!=null?r1(last.hotF):"?"} / hot R ${last.hotR!=null?r1(last.hotR):"?"}`,
+    `Last run: cold F ${last.coldF!=null?r1(last.coldF):"?"} / R ${last.coldR!=null?r1(last.coldR):"?"}; hot F ${last.hotF!=null?r1(last.hotF):"?"} / hot R ${last.hotR!=null?r1(last.hotR):"?"}`,
     "",
     "DATA_JSON:",
     JSON.stringify(last)
@@ -1801,7 +1802,7 @@ async function copySummary(){
   lines.push(`Tyre: ${last.tyreName}`);
   lines.push(`Track: ${last.trackId}`);
   lines.push(`Targets hot: F ${r1(last.targetHotF)} / R ${r1(last.targetHotR)} (max ${last.maxHot})`);
-  lines.push(`Last: cold F ${r1(last.coldF)} / R ${r1(last.coldR)}; hot F ${last.hotF!=null?r1(last.hotF):"?"} / hot R ${last.hotR!=null?r1(last.hotR):"?"}`);
+  lines.push(`Last: cold F ${last.coldF!=null?r1(last.coldF):"?"} / R ${last.coldR!=null?r1(last.coldR):"?"}; hot F ${last.hotF!=null?r1(last.hotF):"?"} / hot R ${last.hotR!=null?r1(last.hotR):"?"}`);
   lines.push(`App next cold: F ${r1(last.nextColdF)} / R ${r1(last.nextColdR)} (gain ${last.expGainF.toFixed(2)} ${last.srcF} / ${last.expGainR.toFixed(2)} ${last.srcR})`);
   const off = last.setup?.offsets || {};
   const hasOffsets =
