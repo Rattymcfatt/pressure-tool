@@ -52,6 +52,8 @@ body.locked footerbar{display:none}
   .pill.bad{border-color:rgba(251,113,133,.45);color:var(--bad)}
   .hint{color:var(--muted);font-size:12px;margin-top:6px;line-height:1.35}
   .locked .lockable{opacity:0.35;pointer-events:none;filter:grayscale(0.2)}
+  .adminOnly{display:none !important}
+  body.admin .adminOnly{display:revert !important}
   #authGate{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(11,11,13,.92);z-index:20;padding:16px}
   .locked #authGate{display:flex}
   #authGate .card{max-width:420px;width:100%}
@@ -62,6 +64,7 @@ body.locked footerbar{display:none}
   #authGate .recoveryPanel{margin-top:12px;padding:12px;border-radius:12px;border:1px solid rgba(96,165,250,.35);background:linear-gradient(135deg,rgba(96,165,250,.08),#0f0f14);display:none;gap:8px}
   #authGate .recoveryPanel.active{display:grid}
   #authGate .recoveryPanel h4{margin:0;font-size:14px}
+  #authGate .adminControls{margin-top:10px}
   #syncStatus.flash,#syncStatusInline.flash{color:var(--acc);font-weight:850}
   pre{white-space:pre-wrap;margin:8px 0 0;color:#cdd0d5}
   footerbar{position:fixed;left:0;right:0;bottom:0;z-index:10;border-top:1px solid var(--line);background:rgba(11,11,13,.92);backdrop-filter:blur(10px);padding:12px 14px}
@@ -120,10 +123,15 @@ body.locked footerbar{display:none}
       <div class="hint">Your reset link opens this page so you can set a new password here.</div>
     </div>
     <div class="hint" id="syncStatus">Login required.</div>
-    <details style="margin-top:8px">
+    <details class="adminOnly" style="margin-top:8px">
       <summary class="muted">Auth debug</summary>
       <pre id="authDebug"></pre>
     </details>
+    <div class="row adminControls">
+      <button class="secondary" id="adminUnlockBtn" type="button">Admin unlock</button>
+      <button class="secondary adminOnly" id="adminLockBtn" type="button">Admin lock</button>
+    </div>
+    <div class="hint" id="adminStatus"></div>
   </div>
 </div>
 
@@ -354,21 +362,16 @@ body.locked footerbar{display:none}
   <!-- AI -->
   <section class="card lockable">
     <h3 style="margin:0 0 8px">AI Double-Check (Groq)</h3>
-    <div class="row">
-      <div>
-        <label>Groq API Key (saved on this device)</label>
-        <input id="groqKey" type="password" placeholder="gsk_...">
-      </div>
-      <div>
-        <label>Model</label>
-        <select id="groqModel">
-          <option value="llama-3.1-8b-instant" selected>llama-3.1-8b-instant</option>
-          <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
-        </select>
-      </div>
+    <div class="hint">AI runs via backend. No keys are stored in this browser.</div>
+    <div class="adminOnly" style="margin-top:8px">
+      <label>Model</label>
+      <select id="groqModel">
+        <option value="llama-3.1-8b-instant" selected>llama-3.1-8b-instant</option>
+        <option value="llama-3.3-70b-versatile">llama-3.3-70b-versatile</option>
+      </select>
     </div>
     <div class="row" style="margin-top:10px">
-      <button class="secondary" id="saveAiBtn" type="button">Save</button>
+      <button class="secondary adminOnly" id="saveAiBtn" type="button">Save</button>
       <button class="secondary" id="toggleAiBtn" type="button">AI: OFF</button>
     </div>
     <div class="hint" id="aiStatus">When AI is ON, it runs automatically after Analyze.</div>
@@ -402,12 +405,12 @@ body.locked footerbar{display:none}
     <div id="aiOut" class="muted">AI is off, or no analysis yet.</div>
   </section>
 
-  <details class="card lockable">
+  <details class="card lockable adminOnly">
     <summary class="muted">Session Log (last 40)</summary>
     <pre id="logView"></pre>
   </details>
 
-  <details class="card lockable">
+  <details class="card lockable adminOnly">
     <summary class="muted">Debug (last analysis JSON)</summary>
     <pre id="debug"></pre>
   </details>
@@ -461,7 +464,7 @@ const TRACK_BASELINE_NUDGE = {
   "ACT_CANBERRA_MARK_WEBBER": { DUNLOP_DHH: { dF:+0.2, dR:+0.2 } }
 };
 
-const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_EDGE_FUNCTION = "groq-check"; // Supabase Edge Function name
 
 /* =========================
    STORAGE
@@ -495,7 +498,7 @@ function normalizeState(){
   if (!state.ai || typeof state.ai !== "object") state.ai = {};
   if (state.ai.enabled == null) state.ai.enabled = false;
   state.ai.enabled = !!state.ai.enabled;
-  state.ai.key ||= "";
+  state.ai.key = "";
   state.ai.model ||= "llama-3.1-8b-instant";
 
   if (!state.sync || typeof state.sync !== "object") state.sync = {};
@@ -508,6 +511,46 @@ function normalizeState(){
   if (state.lastUpdated === undefined) state.lastUpdated = null;
 }
 normalizeState();
+
+const ADMIN_UNLOCK_KEY = "pressure_admin_unlocked_v1";
+const ADMIN_CODE_KEY = "pressure_admin_code_v1";
+function adminEnabled(){
+  return localStorage.getItem(ADMIN_UNLOCK_KEY) === "1";
+}
+function setAdminMode(enabled){
+  if (enabled) localStorage.setItem(ADMIN_UNLOCK_KEY, "1");
+  else localStorage.removeItem(ADMIN_UNLOCK_KEY);
+  document.body.classList.toggle("admin", enabled);
+  updateAdminStatus();
+}
+function updateAdminStatus(){
+  const status = el("adminStatus");
+  if (!status) return;
+  status.textContent = adminEnabled() ? "Admin unlocked on this device." : "Admin locked.";
+}
+function handleAdminUnlock(){
+  let code = localStorage.getItem(ADMIN_CODE_KEY) || "";
+  if (!code){
+    const first = prompt("Set a new admin passcode:");
+    if (!first) return;
+    const second = prompt("Confirm admin passcode:");
+    if (first !== second){
+      alert("Passcodes do not match.");
+      return;
+    }
+    localStorage.setItem(ADMIN_CODE_KEY, first);
+    code = first;
+  }
+  const attempt = prompt("Enter admin passcode:");
+  if (attempt === code){
+    setAdminMode(true);
+  } else {
+    alert("Incorrect admin passcode.");
+  }
+}
+function handleAdminLock(){
+  setAdminMode(false);
+}
 
 /* =========================
    SUPABASE CONFIG (EDIT THESE)
@@ -1604,9 +1647,7 @@ function buildAiUserPrompt(last){
 }
 
 async function groqChatStrict(systemPrompt, userPrompt){
-  const key = (state.ai?.key || "").trim();
   const model = state.ai?.model || "llama-3.1-8b-instant";
-  if (!key) throw new Error("No Groq key saved.");
   const payload = {
     model,
     messages: [
@@ -1616,20 +1657,17 @@ async function groqChatStrict(systemPrompt, userPrompt){
     temperature: 0.2,
     max_tokens: 650
   };
-  const res = await fetch(GROQ_CHAT_URL, {
-    method:"POST",
-    headers:{
-      "Authorization":"Bearer " + key,
-      "Content-Type":"application/json"
-    },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok){
-    const t = await res.text().catch(()=>"(no body)");
-    throw new Error(`Groq HTTP ${res.status}: ${t.slice(0,260)}`);
+  initSupabase();
+  if (!supabaseClient?.functions){
+    throw new Error("AI backend is not available.");
   }
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content;
+
+  const { data, error } = await supabaseClient.functions.invoke(GROQ_EDGE_FUNCTION, { body: payload });
+  if (error){
+    const details = formatSupabaseError(error) || error.message || "unknown";
+    throw new Error("AI backend error: " + details);
+  }
+  const content = data?.content || data?.choices?.[0]?.message?.content;
   if (!content) throw new Error("No Groq response content.");
   return content;
 }
@@ -1811,8 +1849,9 @@ function refreshAiUI(){
     : "AI is off.";
 }
 function saveAiSettings(){
-  state.ai.key = (el("groqKey").value||"").trim();
-  state.ai.model = el("groqModel").value;
+  const modelEl = el("groqModel");
+  if (modelEl) state.ai.model = modelEl.value;
+  state.ai.key = "";
   save();
   refreshAiUI();
 }
@@ -1864,6 +1903,7 @@ function renderLog(){
 ========================= */
 async function init(){
   renderTracks();
+  setAdminMode(adminEnabled());
 
   // Always start locked until SIGNED_IN
   setAppLocked(true);
@@ -1891,8 +1931,8 @@ async function init(){
   refreshAxleStiffness();
 
   // AI restore
-  el("groqKey").value = state.ai.key || "";
-  el("groqModel").value = state.ai.model || "llama-3.1-8b-instant";
+  const modelEl = el("groqModel");
+  if (modelEl) modelEl.value = state.ai.model || "llama-3.1-8b-instant";
   refreshAiUI();
 
   // Prefill last email (no passwords stored)
@@ -1950,6 +1990,8 @@ async function init(){
   el("updatePasswordBtn").onclick = handlePasswordUpdate;
   el("syncSignOutBtn").onclick = handleSignOut;
   el("syncNowBtn").onclick = ()=>syncNow({ notify:true });
+  el("adminUnlockBtn").onclick = handleAdminUnlock;
+  el("adminLockBtn").onclick = handleAdminLock;
 
   // Analyze button (locked via .lockable + disabled)
   el("analyzeBtn").onclick = async ()=>{
